@@ -132,10 +132,11 @@ def analyze_setup(
     candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
-    candles_1m: list[dict[str, Any]],
+    candles_1m: list[dict[str, Any]] | None = None,
 ) -> Analysis:
-    """Evaluate the setup as a sequence; returns a reasoned no-trade result when incomplete."""
-    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m, "1M": candles_1m}
+    """Evaluate the setup; omit 1M to test using 1H/15M/5M only."""
+    reaction_candles = candles_5m if candles_1m is None else candles_1m
+    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m, "1M": reaction_candles}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     evidence: list[str] = []
     missing: list[str] = []
@@ -378,7 +379,7 @@ def detect_candidate(
     candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
-    candles_1m: list[dict[str, Any]],
+    candles_1m: list[dict[str, Any]] | None = None,
 ) -> Candidate | None:
-    """Compatibility wrapper for the monitoring worker."""
+    """Compatibility wrapper; omit 1M to run in 1H/15M/5M-only mode."""
     return analyze_setup(symbol, candles_1h, candles_15m, candles_5m, candles_1m).candidate

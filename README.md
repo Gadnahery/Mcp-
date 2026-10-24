@@ -65,9 +65,11 @@ Use the same branch/revision for both services. A continuously running worker ma
 ### Strategy and safety limits
 
 - Higher-timeframe context uses close-to-close progress (not candle colour alone).
-- The initial candidate proxy looks for aligned 1H/15M dominance, a recent 1M range sweep/reclaim, and a following candle confirmation.
-- The 5M timeframe is used as a conflict filter.
-- The initial target is calculated at 3R from the entry and structural stop; this is not yet filtered against a fully mapped higher-timeframe reaction area, spread, slippage, or instrument-specific execution constraints.
+- The staged engine checks data quality, 1H/15M close-to-close dominance, 5M approach/conflict, detected higher-timeframe swing references, a 1M sweep/reclaim at a reference, the post-sweep struggle/base, a decisive close beyond the local range, a structural invalidation stop, and the next detected reaction reference.
+- The target must be the next detected higher-timeframe swing in the trade direction and must leave at least 1:3 planned R:R; otherwise the engine returns NO_TRADE.
+- Telegram messages include the evidence recorded at each stage, not only BUY/SELL and prices.
+- The automatic swing-point, reaction-zone tolerance and possible-base detectors are **provisional coding proxies**. The study notes do not yet specify exact universal thresholds for those concepts, so they must be reviewed against the annotated examples before being treated as confirmed rules.
+- Entry-at-decisive-close is the only automated entry style currently emitted. The notes say immediate entry versus pullback is context-dependent; that comparison is not yet fully codified, so alerts must remain disabled until chart replay verifies it.
 - A missing, stale, contradictory, or incomplete setup should produce no alert.
 - A rule-based detector is not a trained AI model. AI-based interpretation should be added only as an explanatory layer after the confirmed rules and historical test cases are documented.
 

@@ -234,7 +234,7 @@ def analyze_setup(
     # The strategy notes describe indecision/rejection AFTER the false sweep.
     # This detector is still a proxy: it looks for a compact/alternating reaction
     # after the sweep, then requires a later close beyond that reaction's range.
-    base, base_note = _indecision_or_base(after_sweep[:min(3, len(after_sweep))], count=3)
+    base, base_note = _indecision_or_base(before_cluster + [sweep] + after_sweep[:3], count=3)
     evidence.append(base_note)
     if not base:
         return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("No clear post-sweep indecision/base detected by the provisional heuristic; inspect rejection manually",))
@@ -266,7 +266,7 @@ def analyze_setup(
         target_levels = [x for x in ref_highs if x > entry]
         target = min(target_levels) if target_levels else None
     else:
-        stop = max(float(c["high"]) for c in m1[sweep_index: m1.index(confirm) + 1])
+        stop = max(float(c["high"]) for c in m1[sweep_index: confirm_index + 1])
         risk = stop - entry
         target_levels = [x for x in ref_lows if x < entry]
         target = max(target_levels) if target_levels else None

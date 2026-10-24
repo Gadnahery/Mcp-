@@ -63,7 +63,7 @@ async def run() -> None:
         for symbol in settings.symbols:
             try:
                 data = {}
-                for timeframe in ("1h", "15m", "5m", "1m"):
+                for timeframe in ("1h", "15m", "5m"):
                     data[timeframe] = await api.candles(symbol, timeframe, settings.candle_count)
                 # Candle timestamps are candle-open epochs. Require a recent completed
                 # candle on every timeframe; stale/closed-market data must never alert.
@@ -82,7 +82,7 @@ async def run() -> None:
                     continue
 
                 candidate = detect_candidate(
-                    symbol, data["1h"], data["15m"], data["5m"], data["1m"]
+                    symbol, data["1h"], data["15m"], data["5m"]
                 )
                 if candidate is None:
                     logger.info("%s: no complete candidate", symbol)

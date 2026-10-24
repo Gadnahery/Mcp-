@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: deriv-mcp
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: MCP_TRANSPORT
+        value: sse
+      - key: DERIV_API_TOKEN
+        sync: false   # set this manually in dashboard for security
+      - key: PORT
+        value: 10000

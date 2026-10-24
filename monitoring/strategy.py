@@ -297,6 +297,79 @@ def analyze_setup(
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)
 
 
+def analyze_annotated_short(
+    symbol: str,
+    candles_1h: list[dict[str, Any]],
+    candles_15m: list[dict[str, Any]],
+    candles_5m: list[dict[str, Any]],
+    candles_1m: list[dict[str, Any]],
+    *,
+    rejection_high: float,
+    confirmation_high: float,
+    confirmation_low: float,
+    entry_reference: float,
+    stop_reference: float,
+    target_reference: float,
+) -> Analysis:
+    """Replay an explicitly annotated short setup against candles.
+
+    Unlike analyze_setup(), this function uses user-marked levels instead of
+    pretending swing heuristics can infer the annotations. It is a replay helper,
+    not a live signal generator. It checks the sequence around the marked levels;
+    exact OHLC candles are required to validate timing.
+    """
+    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m, "1M": candles_1m}
+    data = {tf: _completed(cs) for tf, cs in raw.items()}
+    missing: list[str] = []
+    evidence: list[str] = []
+    if any(len(data[tf]) < 20 for tf in data):
+        return Analysis(symbol, "NO_TRADE", "SELL", "data_quality", (), ("Need at least 20 valid candles per timeframe for replay context",))
+    # Drop the latest candle, which may still be forming.
+    data = {tf: cs[:-1] for tf, cs in data.items()}
+    h1_dom, m15_dom = _dominance(data["1H"], 3), _dominance(data["15M"], 3)
+    evidence.extend([f"1H dominance: {h1_dom or 'unclear'}", f"15M dominance: {m15_dom or 'unclear'}"])
+    if h1_dom != "bearish" or m15_dom != "bearish":
+        return Analysis(symbol, "NO_TRADE", "SELL", "higher_timeframe_context", tuple(evidence), ("The 1H and 15M must show bearish close-to-close dominance for this conservative replay gate",))
+    m5_dom = _dominance(data["5M"], 3)
+    evidence.append(f"5M approach dominance: {m5_dom or 'mixed/unclear'}")
+    candles = data["1M"]
+    # Locate a completed candle that trades above the marked rejection reference
+    # and closes back below it. This is the observable sweep/rejection condition.
+    sweep_i = None
+    for i, c in enumerate(candles):
+        if float(c["high"]) >= rejection_high and float(c["close"]) < rejection_high:
+            sweep_i = i
+    if sweep_i is None:
+        return Analysis(symbol, "NO_TRADE", "SELL", "sweep_rejection", tuple(evidence), (f"No completed 1M candle tested {rejection_high:.3f} and closed back below it",))
+    evidence.append(f"Rejection reference {rejection_high:.3f} tested and close returned below it")
+    # Require later price action to enter the marked confirmation band and close
+    # below its lower edge; a zone touch alone is not confirmation.
+    confirm = None
+    for c in candles[sweep_i + 1:]:
+        if float(c["high"]) >= confirmation_low and float(c["low"]) <= confirmation_high:
+            evidence.append(f"Price traded through marked confirmation band {confirmation_low:.3f}-{confirmation_high:.3f}")
+        if float(c["close"]) < confirmation_low:
+            confirm = c
+            break
+    if confirm is None:
+        return Analysis(symbol, "NO_TRADE", "SELL", "seller_confirmation", tuple(evidence), ("No later completed close below the marked confirmation band",))
+    entry = float(confirm["close"])
+    stop = max(stop_reference, rejection_high)
+    risk = stop - entry
+    reward = entry - target_reference
+    if risk <= 0 or reward <= 0:
+        return Analysis(symbol, "NO_TRADE", "SELL", "risk", tuple(evidence), ("Annotated levels do not produce positive risk and reward",))
+    rr = reward / risk
+    evidence.append(f"Confirmation close {entry:.5f}; invalidation {stop:.5f}; target {target_reference:.5f}; planned R:R 1:{rr:.2f} before costs")
+    if rr < 3:
+        return Analysis(symbol, "NO_TRADE", "SELL", "risk_reward", tuple(evidence), ("Annotated levels do not meet minimum planned 1:3 R:R before costs",))
+    candidate = Candidate(symbol, "SELL", entry, stop, target_reference, rr, int(confirm["epoch"]),
+        "Annotated short replay candidate; based on user-supplied rejection/confirmation/target levels. Research only.",
+        f"Setup invalid if price trades above {stop:.5f}.", tuple(evidence), "decisive_close",
+        "user-annotated target")
+    return Analysis(symbol, "CANDIDATE", "SELL", "annotated_replay_candidate", tuple(evidence), tuple(missing), candidate)
+
+
 def detect_candidate(
     symbol: str,
     candles_1h: list[dict[str, Any]],

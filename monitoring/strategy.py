@@ -157,16 +157,18 @@ def analyze_setup(
     if h1_dom:
         evidence.append(f"1H close-to-close dominance: {h1_dom}")
     else:
-        missing.append("1H: no clear three-step close-to-close dominance")
+        evidence.append("1H close-to-close dominance is mixed/unclear")
     if m15_dom:
         evidence.append(f"15M close-to-close dominance: {m15_dom}")
     else:
-        missing.append("15M: no clear three-step close-to-close dominance")
-    if not h1_dom or not m15_dom or h1_dom != m15_dom:
-        if h1_dom and m15_dom and h1_dom != m15_dom:
-            missing.append("1H and 15M dominance disagree; context is not aligned")
-        return Analysis(symbol, "NO_TRADE", None, "higher_timeframe_context", tuple(evidence), tuple(missing))
-
+        evidence.append("15M close-to-close dominance is mixed/unclear")
+    # Softer context gate: disagreement is evidence, not an automatic veto.
+    # A clear opposing move on both higher timeframes remains a caution, but the
+    # engine may still inspect a reversal at a meaningful area instead of stopping.
+    context_conflict = bool(h1_dom and m15_dom and h1_dom != m15_dom)
+    if context_conflict:
+        evidence.append("1H/15M dominance disagree; reversal setup requires stronger local confirmation")
+    context_bias = h1_dom or m15_dom
     # Identify nearby higher-timeframe reaction references. These are mechanically
     # detected swing points; the notes do not yet define a fully automatic zone algorithm.
     h1_highs, h1_lows = _swing_levels(h1[-80:])
@@ -191,28 +193,29 @@ def analyze_setup(
         if _dominance(recent_5m, 3) == m5_dom:
             return Analysis(symbol, "NO_TRADE", None, "approach", tuple(evidence), ("5M is still making clear progress against the 1H/15M direction; no confirmed loss of that control",))
 
-    # Look for the most recent sweep at a meaningful higher-timeframe swing reference.
-    # A sweep is only a stage; it cannot itself produce a candidate.
+    # Look for either a high sweep/rejection or a low sweep/reclaim at a meaningful
+    # higher-timeframe reference. Context helps rank the setup; it does not dictate
+    # direction by itself. A sweep alone still cannot produce a candidate.
     side: Side | None = None
     sweep: dict[str, Any] | None = None
     swept_level: float | None = None
     recent = m1[-12:]
-    if h1_dom == "bullish":
-        for i in range(max(0, len(recent) - 6), len(recent) - 2):
-            candle = recent[i]
-            low = float(candle["low"])
-            close = float(candle["close"])
-            level = _near_any(low, ref_lows, tolerance)
-            if level is not None and low < level and close > level:
-                side, sweep, swept_level = "BUY", candle, level
-    else:
-        for i in range(max(0, len(recent) - 6), len(recent) - 2):
-            candle = recent[i]
-            high = float(candle["high"])
-            close = float(candle["close"])
-            level = _near_any(high, ref_highs, tolerance)
-            if level is not None and high > level and close < level:
-                side, sweep, swept_level = "SELL", candle, level
+    possible: list[tuple[int, Side, dict[str, Any], float]] = []
+    for i in range(max(0, len(recent) - 6), len(recent) - 2):
+        candle = recent[i]
+        low, high, close = float(candle["low"]), float(candle["high"]), float(candle["close"])
+        low_level = _near_any(low, ref_lows, tolerance)
+        high_level = _near_any(high, ref_highs, tolerance)
+        if low_level is not None and low < low_level and close > low_level:
+            possible.append((i, "BUY", candle, low_level))
+        if high_level is not None and high > high_level and close < high_level:
+            possible.append((i, "SELL", candle, high_level))
+    if possible:
+        # Prefer the latest sweep. If context conflicts with it, preserve the setup
+        # for confirmation analysis but record that extra evidence is required.
+        _, side, sweep, swept_level = possible[-1]
+        if context_bias and ((context_bias == "bullish" and side == "SELL") or (context_bias == "bearish" and side == "BUY")):
+            evidence.append(f"{side} sweep runs against current dominant close-to-close bias; require especially clear confirmation")
 
     if side is None or sweep is None or swept_level is None:
         return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (

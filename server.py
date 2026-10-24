@@ -28,7 +28,7 @@ from mcp.server.fastmcp import FastMCP
 
 # ====================== CONFIG ======================
 # Your Deriv Personal Access Token (PAT)
-DERIV_TOKEN = os.getenv("DERIV_API_TOKEN", "pat_9261aba7005e020de5094f34383ec89d3631ad770d2a5a53b9c975877f1591bb")
+DERIV_TOKEN = os.getenv("DERIV_API_TOKEN")
 
 # Public WebSocket endpoint (no auth needed for market data)
 WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
@@ -39,7 +39,10 @@ WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("deriv-mcp")
 
-mcp = FastMCP("Deriv Market Data")
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "8000"))
+
+mcp = FastMCP("Deriv Market Data", host=HOST, port=PORT)
 
 # ====================== WebSocket Helper ======================
 
@@ -78,6 +81,14 @@ class DerivClient:
         except asyncio.TimeoutError:
             return {"error": {"message": "Request timed out"}}
 
+    def is_closed(self) -> bool:
+        if self.ws is None:
+            return True
+        state = getattr(self.ws, "state", None)  # websockets >= 14
+        if state is not None:
+            return state.name != "OPEN"
+        return bool(getattr(self.ws, "closed", False))  # legacy
+
     async def close(self):
         if self.ws:
             await self.ws.close()
@@ -88,7 +99,7 @@ _client: Optional[DerivClient] = None
 
 async def get_client() -> DerivClient:
     global _client
-    if _client is None or _client.ws is None or _client.ws.closed:
+    if _client is None or _client.ws is None or _client.is_closed():
         _client = DerivClient(DERIV_TOKEN)
         await _client.connect()
     return _client
@@ -280,20 +291,11 @@ async def get_symbol_info(symbol: str) -> dict:
 
 if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
-    port = int(os.getenv("PORT", "8000"))
-    host = os.getenv("HOST", "0.0.0.0")
+    logger.info(f"Starting Deriv MCP | transport={transport} host={HOST} port={PORT}")
 
-    logger.info(f"Starting Deriv MCP | transport={transport} host={host} port={port}")
-
-    try:
-        if transport in ("sse", "http", "streamable-http"):
-            try:
-                mcp.run(transport="streamable-http", host=host, port=port)
-            except Exception as e1:
-                logger.warning(f"streamable-http failed ({e1}), trying sse...")
-                mcp.run(transport="sse", host=host, port=port)
-        else:
-            mcp.run(transport="stdio")
-    except Exception as e:
-        logger.exception("Failed to start MCP server")
-        raise
+    if transport == "sse":
+        mcp.run(transport="sse")
+    elif transport in ("http", "streamable-http"):
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from monitoring.config import Settings
-from monitoring.market_data import DerivMarketData
+from monitoring.market_data import DerivMarketData, GRANULARITIES
 from monitoring.strategy import detect_candidate
 from monitoring.telegram import format_candidate, send_telegram
 
@@ -65,6 +65,22 @@ async def run() -> None:
                 data = {}
                 for timeframe in ("1h", "15m", "5m", "1m"):
                     data[timeframe] = await api.candles(symbol, timeframe, settings.candle_count)
+                # Candle timestamps are candle-open epochs. Require a recent completed
+                # candle on every timeframe; stale/closed-market data must never alert.
+                now = int(time.time())
+                stale = []
+                for timeframe, candles in data.items():
+                    if len(candles) < 2:
+                        stale.append(timeframe)
+                        continue
+                    last_completed = candles[-2]
+                    age = now - (int(last_completed["epoch"]) + GRANULARITIES[timeframe])
+                    if age > (3 * GRANULARITIES[timeframe] + 60) or age < -60:
+                        stale.append(timeframe)
+                if stale:
+                    logger.warning("%s: stale/incomplete data on %s; skipping", symbol, ",".join(stale))
+                    continue
+
                 candidate = detect_candidate(
                     symbol, data["1h"], data["15m"], data["5m"], data["1m"]
                 )

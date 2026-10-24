@@ -26,7 +26,7 @@ For an authenticated Deriv feature, set `DERIV_API_TOKEN` in your environment. D
 
 ## Optional strategy monitor (first implementation)
 
-The monitor is an independent process so it does not change the existing MCP transport or routes. It retrieves candles for the configured instruments and timeframes (1H, 15M, 5M, 1M), evaluates a conservative rule-based candidate detector, suppresses repeated alerts, and can send a Telegram message.
+The monitor is an independent process so it does not change the existing MCP transport or routes. It retrieves candles for the configured instruments and timeframes (1H, 15M, 5M), evaluates a conservative rule-based candidate detector, suppresses repeated alerts, and can send a Telegram message.
 
 **Important:** this is an experimental candidate detector based on a mechanical approximation of the candle-behaviour study. It is not yet a complete encoding of the study notes and has not been proven profitable. Run historical replay and paper monitoring before enabling live notifications. It never places orders.
 
@@ -65,7 +65,7 @@ Use the same branch/revision for both services. A continuously running worker ma
 ### Strategy and safety limits
 
 - Higher-timeframe context uses close-to-close progress (not candle colour alone).
-- The staged engine checks data quality, 1H/15M close-to-close dominance, 5M approach/conflict, detected higher-timeframe swing references, a 1M sweep/reclaim at a reference, the post-sweep struggle/base, a decisive close beyond the local range, a structural invalidation stop, and the next detected reaction reference.
+- The current test mode intentionally omits 1M and checks data quality, 1H/15M close-to-close dominance, 5M approach/conflict, detected higher-timeframe swing references, a 5M sweep/reclaim at a reference, the post-sweep struggle/base on 5M, a decisive 5M close beyond the local range, a structural invalidation stop, and the next detected reaction reference.
 - The target must be the next detected higher-timeframe swing in the trade direction and must leave at least 1:3 planned R:R; otherwise the engine returns NO_TRADE.
 - Telegram messages include the evidence recorded at each stage, not only BUY/SELL and prices.
 - The automatic swing-point, reaction-zone tolerance and possible-base detectors are **provisional coding proxies**. The study notes do not yet specify exact universal thresholds for those concepts, so they must be reviewed against the annotated examples before being treated as confirmed rules.

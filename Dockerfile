@@ -8,8 +8,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY server.py .
 
 ENV MCP_TRANSPORT=sse
-ENV PORT=10000
+ENV PORT=8000
+ENV HOST=0.0.0.0
+ENV PYTHONUNBUFFERED=1
 
-EXPOSE 10000
+EXPOSE 8000
 
 CMD ["python", "server.py"]

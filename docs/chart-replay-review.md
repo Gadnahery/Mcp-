@@ -123,3 +123,22 @@ The live analyzer's rigid "1H and 15M must have identical clear dominance" early
 - Full engine replay: **blocked / not yet verified**, because the data window does not match the screenshot timestamp and 1-minute candles were unavailable.
 - Automated unit tests: not executed in a Python runtime or CI in this session.
 - No live alerts or order execution were enabled.
+
+
+## Case E — Reproducible historical fixture and assertions
+
+Added:
+- `tests/fixtures/usdjpy_5m_replay.json`: 22 actual Deriv OHLC candles from the matching-pattern window, with source and limitations embedded in the fixture.
+- `tests/test_historical_usdjpy_replay.py`: regression assertions for valid/ordered OHLC, high rejection, first close below the confirmation boundary, target crossing, and delayed-entry R:R.
+
+**Assertions manually executed against the committed fixture in this session:** all six expected checks passed:
+1. 22 candles are present and ordered.
+2. OHLC bounds are valid.
+3. Rejection candle is epoch 1792754700 (11:25 UTC), high 156.962, close 156.946.
+4. First later close below 156.870 is epoch 1792756800 (12:00 UTC), close 156.853.
+5. Target-crossing candle is epoch 1792758900 (12:35 UTC), low 156.566.
+6. Delayed entry R:R is approximately 2.3115R, below the 3R rule.
+
+**Important scope:** these are deterministic historical-data regression checks, not a full run of `analyze_setup()` over synchronized 1H/15M/5M/1M candles. The data window does not match the screenshot timestamp; the Deriv endpoint did not return 1M candles for this request. The production detector still needs end-to-end replay and false-positive/missed-setup evaluation.
+
+A GitHub Actions workflow file could not be created through the available repository action in this session, so the committed Python tests have **not** been executed by CI. Run locally with `python -m unittest discover -s tests -v` after installing `requirements.txt`.

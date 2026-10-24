@@ -311,7 +311,7 @@ def analyze_annotated_short(
     stop_reference: float,
     target_reference: float,
 ) -> Analysis:
-    """Replay an explicitly annotated short setup against candles.
+    """Replay an explicitly annotated 5-minute short setup against candles.
 
     Unlike analyze_setup(), this function uses user-marked levels instead of
     pretending swing heuristics can infer the annotations. It is a replay helper,
@@ -332,15 +332,15 @@ def analyze_annotated_short(
         return Analysis(symbol, "NO_TRADE", "SELL", "higher_timeframe_context", tuple(evidence), ("The 1H and 15M must show bearish close-to-close dominance for this conservative replay gate",))
     m5_dom = _dominance(data["5M"], 3)
     evidence.append(f"5M approach dominance: {m5_dom or 'mixed/unclear'}")
-    candles = data["1M"]
-    # Locate a completed candle that trades above the marked rejection reference
+    candles = data["5M"]
+    # Locate a completed 5-minute candle that trades above the marked rejection reference
     # and closes back below it. This is the observable sweep/rejection condition.
     sweep_i = None
     for i, c in enumerate(candles):
         if float(c["high"]) >= rejection_high and float(c["close"]) < rejection_high:
             sweep_i = i
     if sweep_i is None:
-        return Analysis(symbol, "NO_TRADE", "SELL", "sweep_rejection", tuple(evidence), (f"No completed 1M candle tested {rejection_high:.3f} and closed back below it",))
+        return Analysis(symbol, "NO_TRADE", "SELL", "sweep_rejection", tuple(evidence), (f"No completed 5M candle tested {rejection_high:.3f} and closed back below it",))
     evidence.append(f"Rejection reference {rejection_high:.3f} tested and close returned below it")
     # Require later price action to enter the marked confirmation band and close
     # below its lower edge; a zone touch alone is not confirmation.

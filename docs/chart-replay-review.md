@@ -92,3 +92,34 @@ Until this data is supplied and replayed, status remains **not validated**. The 
 - To score the detector, obtain exact timestamped OHLC candles for this interval and compare the detected signal candle with the user's intended confirmation candle.
 
 This screenshot is now a concrete visual reference case, but it is **not yet an exact OHLC replay fixture**. Keep alerts disabled until replay can be tested against timestamped candle data.
+
+
+## Case D — Historical Deriv USD/JPY replay (data available in this session)
+
+**Data limitations**
+- Deriv returned 5-minute OHLC candles for 23 October 2026, ending at 20:50 UTC.
+- The user's screenshot is labelled 24 October 2026 at 18:26 UTC+3 (15:26 UTC). The returned history does not cover that screenshot time, so this is a matching-pattern test, not the exact screenshot replay.
+- The history endpoint returned no 1-minute candles for this symbol in this request. Therefore the full production path requiring 1H/15M/5M/1M cannot be run end-to-end against this interval.
+
+**Observed 5-minute sequence (UTC)**
+- 11:25: high 156.962, close 156.946 — tests above 156.96 and closes back below it.
+- 11:35: close 156.905.
+- 11:40: close 156.874 — reaches the user's marked entry reference, but does not close below 156.870.
+- 12:00: close 156.853 — first shown close below the lower edge 156.870.
+- 12:35: low 156.566 — crosses the user's 156.571 target level.
+
+**Counterfactual fixed-level calculation**
+If the engine waited until the 12:00 close (156.853) and retained stop 156.975 and target 156.571:
+- risk = 156.975 − 156.853 = 0.122
+- reward = 156.853 − 156.571 = 0.282
+- planned R:R = 0.282 / 0.122 ≈ 2.31R before costs.
+- That delayed close would fail the strategy's minimum 3R rule. This is why confirmation timing matters: the target crossing does not prove that a late entry was valid.
+
+**Code change under test**
+The live analyzer's rigid "1H and 15M must have identical clear dominance" early veto was removed. Dominance is now evidence/context; both high-sweep/rejection and low-sweep/reclaim directions are inspected. A setup against the available dominant bias is flagged for stronger local confirmation. The sweep still cannot produce a candidate without a later reaction/base and decisive close plus risk/target checks.
+
+**Test status**
+- Historical 5-minute pattern check: completed; the marked high rejection and target crossing are present in the returned 23 October history.
+- Full engine replay: **blocked / not yet verified**, because the data window does not match the screenshot timestamp and 1-minute candles were unavailable.
+- Automated unit tests: not executed in a Python runtime or CI in this session.
+- No live alerts or order execution were enabled.

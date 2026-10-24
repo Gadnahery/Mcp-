@@ -132,11 +132,9 @@ def analyze_setup(
     candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
-    candles_1m: list[dict[str, Any]] | None = None,
 ) -> Analysis:
-    """Evaluate the setup; omit 1M to test using 1H/15M/5M only."""
-    reaction_candles = candles_5m if candles_1m is None else candles_1m
-    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m, "1M": reaction_candles}
+    """Evaluate the setup using only 1H, 15M and 5M candles."""
+    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     evidence: list[str] = []
     missing: list[str] = []
@@ -151,7 +149,7 @@ def analyze_setup(
     # Exclude the newest candle in each stream because it may still be forming.
     for tf in data:
         data[tf] = data[tf][:-1]
-    h1, m15, m5, m1 = data["1H"], data["15M"], data["5M"], data["1M"]
+    h1, m15, m5 = data["1H"], data["15M"], data["5M"]
 
     h1_dom = _dominance(h1, 3)
     m15_dom = _dominance(m15, 3)
@@ -200,7 +198,7 @@ def analyze_setup(
     side: Side | None = None
     sweep: dict[str, Any] | None = None
     swept_level: float | None = None
-    recent = m1[-12:]
+    recent = m5[-12:]
     possible: list[tuple[int, Side, dict[str, Any], float]] = []
     for i in range(max(0, len(recent) - 6), len(recent) - 2):
         candle = recent[i]
@@ -220,18 +218,18 @@ def analyze_setup(
 
     if side is None or sweep is None or swept_level is None:
         return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (
-            "No recent 1M sweep-and-reclaim was found at a detected 1H/15M swing reference",
+            "No recent 5M sweep-and-reclaim was found at a detected 1H/15M swing reference",
             "A swing reference is only a proxy for a meaningful area; review the chart context",
         ))
-    evidence.append(f"1M swept and reclaimed detected higher-timeframe reference {swept_level:.5f}")
+    evidence.append(f"5M swept and reclaimed detected higher-timeframe reference {swept_level:.5f}")
     evidence.append("Sweep treated as context only; waiting for post-sweep rejection/response and a decisive close")
 
-    sweep_index = next((i for i, c in enumerate(m1) if int(c["epoch"]) == int(sweep["epoch"])), None)
-    if sweep_index is None or sweep_index < 8 or sweep_index + 1 >= len(m1):
+    sweep_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(sweep["epoch"])), None)
+    if sweep_index is None or sweep_index < 8 or sweep_index + 1 >= len(m5):
         return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Insufficient candles before/after sweep to assess the reaction",))
 
-    before_cluster = m1[max(0, sweep_index - 3):sweep_index]
-    after_sweep = m1[sweep_index + 1:]
+    before_cluster = m5[max(0, sweep_index - 3):sweep_index]
+    after_sweep = m5[sweep_index + 1:]
     if len(after_sweep) < 2:
         return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Need completed candles after the sweep to assess rejection/indecision and the response",))
 
@@ -257,7 +255,7 @@ def analyze_setup(
     if confirm is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No later completed close beyond the post-sweep reaction range; sweep and indecision alone are not entry signals",))
     evidence.append(f"Post-sweep reaction formed a possible base; later candle closed beyond its range at {float(confirm['close']):.5f}")
-    confirm_index = next((i for i, c in enumerate(m1) if int(c["epoch"]) == int(confirm["epoch"])), None)
+    confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
     if confirm_index is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate confirmation candle in ordered data",))
     # Entry is at the confirming close in this first implementation. Pullback entry
@@ -265,12 +263,12 @@ def analyze_setup(
     # the exact pullback decision rules are still open.
     entry = float(confirm["close"])
     if side == "BUY":
-        stop = min(float(c["low"]) for c in m1[sweep_index: confirm_index + 1])
+        stop = min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1])
         risk = entry - stop
         target_levels = [x for x in ref_highs if x > entry]
         target = min(target_levels) if target_levels else None
     else:
-        stop = max(float(c["high"]) for c in m1[sweep_index: confirm_index + 1])
+        stop = max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1])
         risk = stop - entry
         target_levels = [x for x in ref_lows if x < entry]
         target = max(target_levels) if target_levels else None

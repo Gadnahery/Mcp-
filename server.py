@@ -44,6 +44,20 @@ PORT = int(os.getenv("PORT", "8000"))
 
 mcp = FastMCP("Deriv Market Data", host=HOST, port=PORT)
 
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+
+
+@mcp.custom_route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    return PlainTextResponse("Deriv MCP server is running. Connect to /sse")
+
+
+@mcp.custom_route("/health", methods=["GET", "HEAD"])
+async def health(request: Request):
+    return PlainTextResponse("ok")
+
+
 # ====================== WebSocket Helper ======================
 
 class DerivClient:

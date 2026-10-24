@@ -3,6 +3,7 @@ services:
     name: deriv-mcp
     runtime: docker
     plan: free
+    healthCheckPath: /health
     region: oregon
     dockerfilePath: ./Dockerfile
     envVars:

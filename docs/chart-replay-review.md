@@ -51,3 +51,44 @@ The study notebook records visual interpretations of the screenshots, not machin
 For each case, capture timestamped OHLC candles from the original chart (or export the exact instrument/time range), plus the higher-timeframe area marked by the user. Then record each candle's role: approach, sweep, rejection/indecision, uncertain struggle, decisive close, entry, invalidation, target. Compare the detector's output with this annotation and log false positives and missed setups.
 
 Until this data is supplied and replayed, status remains **not validated**. The current code should remain in the research branch with alerts disabled.
+
+
+## Case C — USD/JPY 5-minute annotated short (user-provided screenshot)
+
+**Chart facts visible in the screenshot**
+- Instrument/timeframe: U.S. Dollar / Japanese Yen, 5-minute, OANDA.
+- Screenshot timestamp: 24 October 2026, 18:26 UTC+3.
+- Marked sweep/rejection area: near 156.96.
+- Marked sell confirmation area: approximately 156.90–156.87.
+- Marked sell entry: 156.874.
+- Marked stop-loss: 156.975.
+- Marked take-profit: 156.571, labelled 3R.
+- The visible subsequent decline trades well below the marked target before price rebounds. This suggests the displayed move reached the target level, although the screenshot alone does not establish exact fill/execution quality.
+
+**Arithmetic check**
+- Planned risk: 156.975 − 156.874 = 0.101.
+- Planned reward: 156.874 − 156.571 = 0.303.
+- Planned reward/risk: 0.303 / 0.101 = exactly 3.00R before spread, slippage, and other costs.
+
+**Candle-sequence interpretation**
+1. Price rallies into the marked high/rejection area near 156.96.
+2. The high-area test is context, not by itself a sell trigger.
+3. Price retreats and enters the marked 156.90–156.87 confirmation area.
+4. The intended short is taken near 156.874 after seller confirmation.
+5. The invalidation is above the marked rejection high at 156.975.
+6. The target is 156.571; the displayed later decline crosses that price level.
+
+**What remains unknown**
+- The exact timestamp/OHLC of the sweep candle and decisive confirmation candle are not readable from this annotated screenshot.
+- Exact candle-by-candle closes, spread at entry, slippage, and actual order fill are not supplied.
+- The screenshot does not show the 1H context or 15M refinement, so those parts of the user's preferred workflow cannot be independently verified here.
+
+**Engine replay acceptance criteria**
+- Do not generate a short from the sweep alone.
+- Require the post-sweep seller response and a completed bearish close that supports the marked confirmation area.
+- Use the rejection high as the invalidation reference only if candle data confirms it is the relevant swing.
+- Verify the next reaction target and 1:3 planned R:R after realistic costs.
+- Treat 156.874 / 156.975 / 156.571 as the user's annotated example levels, not universal fixed distances or an automatically inferred setup.
+- To score the detector, obtain exact timestamped OHLC candles for this interval and compare the detected signal candle with the user's intended confirmation candle.
+
+This screenshot is now a concrete visual reference case, but it is **not yet an exact OHLC replay fixture**. Keep alerts disabled until replay can be tested against timestamped candle data.

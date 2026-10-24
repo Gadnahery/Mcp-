@@ -43,6 +43,12 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result.status, "NO_TRADE")
         self.assertIsNone(result.candidate)
 
+    def test_three_timeframe_mode_accepts_omitted_one_minute_data(self):
+        flat = candles_from_closes([10] * 30, spread=0.2)
+        result = analyze_setup("TEST", flat, flat, flat)
+        self.assertEqual(result.status, "NO_TRADE")
+        self.assertIsNone(result.candidate)
+
     def test_sweep_alone_never_returns_candidate(self):
         # Data without clear higher-timeframe close-to-close dominance cannot pass context.
         closes = [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11]

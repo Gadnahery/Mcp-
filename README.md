@@ -1,105 +1,88 @@
 # Deriv MCP Server
 
-Gives Claude, Cursor, ChatGPT and other AI assistants **real-time Deriv market data** (forex, synthetics, gold, etc.).
+Gives Claude, Cursor, ChatGPT and other AI assistants access to Deriv market data (forex, synthetic indices, gold, and other supported markets).
 
-## Tools available
+## Existing MCP tools
 
 | Tool | Description |
-|------|-------------|
-| `get_active_symbols` | List active symbols (forex, synthetic_index, commodities...) |
-| `get_ticks` | Latest live ticks for a symbol |
-| `get_ticks_history` | Historical ticks or OHLC candles |
-| `get_account_balance` | Your account balance (needs token) |
-| `get_symbol_info` | Details about one symbol |
+|---|---|
+| `get_active_symbols` | List active Deriv symbols |
+| `get_ticks` | Retrieve recent ticks |
+| `get_ticks_history` | Retrieve historical ticks or OHLC candles |
+| `get_account_balance` | Read account balance where the configured endpoint/token supports it |
+| `get_symbol_info` | Retrieve information about one symbol |
 
-## Quick Start (Local)
-
-### 1. Install
+## Local setup
 
 ```bash
-cd deriv-mcp
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+python -m venv .venv
+# Windows: .venv\\Scripts\\activate
+# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Set your token (optional but recommended)
-
-```bash
-export DERIV_API_TOKEN="your_token_here"
-```
-
-(The token is already hardcoded in `server.py` for convenience. For better security, remove it from the file and use the environment variable.)
-
-### 3. Run the server
-
-```bash
 python server.py
 ```
 
-### 4. Connect to Claude Desktop
+For an authenticated Deriv feature, set `DERIV_API_TOKEN` in your environment. Do not commit real tokens. If a token was ever committed to Git history, revoke it and create a replacement; deleting it from the latest file does not remove it from history.
 
-Edit your Claude config file:
+## Optional strategy monitor (first implementation)
 
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+The monitor is an independent process so it does not change the existing MCP transport or routes. It retrieves candles for the configured instruments and timeframes (1H, 15M, 5M, 1M), evaluates a conservative rule-based candidate detector, suppresses repeated alerts, and can send a Telegram message.
 
-Add:
+**Important:** this is an experimental candidate detector based on a mechanical approximation of the candle-behaviour study. It is not yet a complete encoding of the study notes and has not been proven profitable. Run historical replay and paper monitoring before enabling live notifications. It never places orders.
 
-```json
-{
-  "mcpServers": {
-    "deriv": {
-      "command": "python",
-      "args": ["/full/path/to/deriv-mcp/server.py"],
-      "env": {
-        "DERIV_API_TOKEN": "your_token_here"
-      }
-    }
-  }
-}
+### Configure
+
+Copy the relevant values from `.env.monitor.example` into the environment of the monitor service:
+
+- `MONITOR_SYMBOLS`: comma-separated Deriv symbol codes. Check each code with `get_active_symbols`; symbols can differ by account/market.
+- `MONITOR_POLL_SECONDS`: minimum delay between monitoring cycles (default 60).
+- `MONITOR_CANDLE_COUNT`: candles requested per timeframe (60–500).
+- `TELEGRAM_ENABLED`: set to `true` only after setting the bot token and chat ID.
+- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`: keep these as Render environment secrets; never put them in source control.
+- `STRATEGY_ALERTS_ENABLED`: defaults to `false`. Leave disabled during setup and testing.
+- `MONITOR_STATE_PATH`: path for duplicate-alert state. A persistent disk is needed if state must survive service restarts.
+
+Create a Telegram bot using Telegram's official BotFather, send it a message, then configure the bot token and destination chat ID in the Render environment. Do not share the token publicly.
+
+### Run locally
+
+```bash
+python monitor_worker.py
 ```
 
-Restart Claude Desktop.
+With default settings it monitors and logs candidates but sends no alerts. To test delivery, set `TELEGRAM_ENABLED=true` and `STRATEGY_ALERTS_ENABLED=true` only after configuring the Telegram credentials and reviewing the detector. The monitor logs a candidate's reasoning and proposed entry/stop/target; prices should be checked against the live chart before any decision.
 
-### 5. Connect to Cursor
+### Deploy on Render
 
-Add to `.cursor/mcp.json` or global settings:
+Keep the existing Render web service running the MCP server. Create a **separate service** from this same repository for monitoring and set its start command to:
 
-```json
-{
-  "mcpServers": {
-    "deriv": {
-      "command": "python",
-      "args": ["/full/path/to/deriv-mcp/server.py"],
-      "env": {
-        "DERIV_API_TOKEN": "your_token_here"
-      }
-    }
-  }
-}
+```bash
+python monitor_worker.py
 ```
 
-## Example questions you can ask the AI
+Use the same branch/revision for both services. A continuously running worker may require a paid Render service depending on current Render plan limits; confirm pricing before creating it. Configure the environment variables in the Render dashboard, not in Git. The existing `render.yaml` remains for the MCP web service.
 
-- "What is the current EURUSD price on Deriv?"
-- "Give me the last 20 ticks of frxXAUUSD"
-- "Show me 5-minute candles for GBPJPY for the last 50 bars"
-- "List all active forex symbols"
-- "What is my account balance?"
+### Strategy and safety limits
+
+- Higher-timeframe context uses close-to-close progress (not candle colour alone).
+- The initial candidate proxy looks for aligned 1H/15M dominance, a recent 1M range sweep/reclaim, and a following candle confirmation.
+- The 5M timeframe is used as a conflict filter.
+- The initial target is calculated at 3R from the entry and structural stop; this is not yet filtered against a fully mapped higher-timeframe reaction area, spread, slippage, or instrument-specific execution constraints.
+- A missing, stale, contradictory, or incomplete setup should produce no alert.
+- A rule-based detector is not a trained AI model. AI-based interpretation should be added only as an explanatory layer after the confirmed rules and historical test cases are documented.
 
 ## Symbol examples
 
 | Symbol | Meaning |
-|--------|---------|
+|---|---|
 | `frxEURUSD` | EUR/USD |
 | `frxGBPUSD` | GBP/USD |
 | `frxXAUUSD` | Gold |
-| `frxGBPJPY` | GBP/JPY |
 | `R_100` | Volatility 100 Index |
 | `1HZ100V` | Volatility 100 (1s) |
 
-## Security Note
+Always verify current symbol availability before monitoring.
 
-The token you provided has been placed in the code for easy testing.  
-**For production use**, remove the hardcoded token and only pass it via environment variable.
+## Security
+
+The server reads `DERIV_API_TOKEN` from the environment. Never hardcode Deriv credentials, Telegram bot tokens, or chat IDs in source files. If a credential was previously committed, rotate/revoke it.

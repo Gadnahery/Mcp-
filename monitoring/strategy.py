@@ -377,7 +377,6 @@ def detect_candidate(
     candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
-    candles_1m: list[dict[str, Any]] | None = None,
 ) -> Candidate | None:
-    """Compatibility wrapper; omit 1M to run in 1H/15M/5M-only mode."""
-    return analyze_setup(symbol, candles_1h, candles_15m, candles_5m, candles_1m).candidate
+    """Run the 1H/15M/5M strategy; 1M is not part of this test version."""
+    return analyze_setup(symbol, candles_1h, candles_15m, candles_5m).candidate

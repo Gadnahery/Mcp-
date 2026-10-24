@@ -31,7 +31,13 @@ from mcp.server.fastmcp import FastMCP
 DERIV_TOKEN = os.getenv("DERIV_API_TOKEN")
 
 # Public WebSocket endpoint (no auth needed for market data)
-WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+WS_URLS = [
+    u for u in (
+        os.getenv("DERIV_WS_URL"),
+        "wss://api.derivws.com/trading/v1/options/ws/public",  # new public endpoint
+        "wss://ws.derivws.com/websockets/v3?app_id=1089",      # legacy fallback
+    ) if u
+]
 
 # For authenticated endpoints you can also use the newer API
 # WS_URL_AUTH = "wss://api.derivws.com/trading/v1/options/ws/public"
@@ -67,8 +73,20 @@ class DerivClient:
         self._req_id = 0
 
     async def connect(self):
-        self.ws = await websockets.connect(WS_URL)
-        if self.token:
+        last_err = None
+        for url in WS_URLS:
+            try:
+                self.ws = await websockets.connect(url, open_timeout=10)
+                self.authorized_ok = False
+                logger.info(f"Connected to {url}")
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f"Connect to {url} failed: {e}")
+        else:
+            raise last_err
+        # Public endpoint does not support authorize; only try on legacy-style URLs
+        if self.token and "/ws/public" not in url:
             # Authorize
             await self.send({"authorize": self.token})
             resp = await self.recv()
@@ -257,6 +275,8 @@ async def get_account_balance() -> dict:
     Get the current account balance (requires a valid API token with read permission).
     """
     client = await get_client()
+    if not client.token or "/ws/public" in (getattr(client.ws, "request", None) and client.ws.request.path or ""):
+        return {"error": "Balance requires an authenticated endpoint. The public market-data endpoint does not support account actions."}
     resp = await client.request({"balance": 1, "subscribe": 0})
     
     if "error" in resp:

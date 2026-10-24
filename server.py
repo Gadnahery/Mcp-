@@ -279,11 +279,21 @@ async def get_symbol_info(symbol: str) -> dict:
 # ====================== RUN ======================
 
 if __name__ == "__main__":
-    # Use SSE for remote hosting (Render), stdio for local
-    transport = os.getenv("MCP_TRANSPORT", "stdio")
-    port = int(os.getenv("PORT", "10000"))
+    transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
 
-    if transport == "sse":
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
-    else:
-        mcp.run(transport="stdio")
+    logger.info(f"Starting Deriv MCP | transport={transport} host={host} port={port}")
+
+    try:
+        if transport in ("sse", "http", "streamable-http"):
+            try:
+                mcp.run(transport="streamable-http", host=host, port=port)
+            except Exception as e1:
+                logger.warning(f"streamable-http failed ({e1}), trying sse...")
+                mcp.run(transport="sse", host=host, port=port)
+        else:
+            mcp.run(transport="stdio")
+    except Exception as e:
+        logger.exception("Failed to start MCP server")
+        raise

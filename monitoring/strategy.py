@@ -304,7 +304,6 @@ def analyze_annotated_short(
     candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
-    candles_1m: list[dict[str, Any]],
     *,
     rejection_high: float,
     confirmation_high: float,
@@ -320,7 +319,7 @@ def analyze_annotated_short(
     not a live signal generator. It checks the sequence around the marked levels;
     exact OHLC candles are required to validate timing.
     """
-    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m, "1M": candles_1m}
+    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     missing: list[str] = []
     evidence: list[str] = []

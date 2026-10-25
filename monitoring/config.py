@@ -9,6 +9,8 @@ DEFAULT_SYMBOLS = (
     "frxEURUSD",
     "frxGBPUSD",
     "cryBTCUSD",
+    "R_75",
+    "R_25",
 )
 
 

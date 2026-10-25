@@ -48,7 +48,8 @@ Commands:
   e.g. /pair gold  /pair btc  /pair v75  /pair v25
 /replay SYMBOL — historical replay (was there a setup?)
   e.g. /replay btc  /replay v75  /replay v25
-  Optional count: /replay btc 200  (5M candles, 60-400)
+  Optional count: /replay btc 200  (5M candles, 80-400)
+  Variants: nearest nopb nospread rr2  (e.g. /replay btc 400 nearest rr2)
 /candidates — recent live trade candidates
 /symbols — list monitored symbols
 /help — this message
@@ -269,11 +270,21 @@ async def run_replay_command(text: str) -> str:
         return f"Unknown symbol '{parts[1]}'. Try: gold, eur, gbp, btc"
 
     count = 180
-    if len(parts) >= 3:
-        try:
-            count = int(parts[2])
-        except ValueError:
-            return "Candle count must be a number (60–400)."
+    opts: dict[str, Any] = {}
+    for tok in parts[2:]:
+        t = tok.lower()
+        if t.isdigit():
+            count = int(t)
+        elif t == "nearest":
+            opts["target_mode"] = "nearest"
+        elif t in ("nopb", "nopullback"):
+            opts["pullback"] = False
+        elif t == "nospread":
+            opts["spread"] = 0.0
+        elif t.startswith("rr") and t[2:].replace(".", "", 1).isdigit():
+            opts["min_rr"] = float(t[2:])
+        else:
+            return "Options: <count 80-400> nearest nopb nospread rr2 (e.g. /replay btc 400 nearest rr2)"
     count = max(80, min(400, count))
 
     try:
@@ -283,7 +294,7 @@ async def run_replay_command(text: str) -> str:
         api = DerivMarketData()
         m15 = await api.candles(symbol, "15m", max(60, count // 3))
         m5 = await api.candles(symbol, "5m", count)
-        result = run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)))
+        result = run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
         return format_replay_report(result)
     except Exception as exc:
         logger.exception("Replay failed for %s", symbol)

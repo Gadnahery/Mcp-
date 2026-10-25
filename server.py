@@ -399,6 +399,27 @@ async def monitor_status() -> dict:
     return _monitor_status()
 
 
+@mcp.tool()
+async def replay(symbol: str = "cryBTCUSD", candles_5m: int = 400, target_mode: str = "",
+                 pullback: bool = True, min_rr: float = 3.0, no_spread: bool = False) -> dict:
+    """Replay the strategy engine over recent Deriv candles (diagnostics).
+
+    Returns the gate tally, near-miss R:R values, and any setups with simulated outcomes.
+    Try variants (target_mode='nearest', min_rr=2, pullback=False) to see how strict the rules are."""
+    from monitoring.market_data import DerivMarketData
+    from monitoring.replay_engine import run_replay
+    n5 = max(80, min(500, int(candles_5m)))
+    api = DerivMarketData()
+    m15 = await api.candles(symbol, "15m", min(500, n5 // 3 + 60))
+    m5 = await api.candles(symbol, "5m", n5)
+    opts: dict = {"pullback": bool(pullback), "min_rr": float(min_rr)}
+    if target_mode:
+        opts["target_mode"] = target_mode
+    if no_spread:
+        opts["spread"] = 0.0
+    return run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
+
+
 def _start_monitor_thread() -> None:
     """Run the optional strategy monitor inside this process (single free Render service)."""
     import asyncio

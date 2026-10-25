@@ -203,3 +203,20 @@ confirmation), nearest 15M swing in the trade direction as target, minimum 1:3, 
 Known gaps (not yet implemented): pullback entries; ranking multiple reaction areas by significance;
 spread/slippage-aware R:R; evidence of profitability. Review `/replay` output across all four pairs
 before relying on alerts.
+
+## Update 2026-10-26 — reaction-area ranking, retest entries, spread-aware R:R, diagnostics
+
+- **Reaction areas ranked by significance:** a 15M swing is a *significant* area if price reacted away from it
+  by >= 1.0 x median 15M range within 4 candles, or it was touched at least twice (equal highs/lows). The target is
+  the nearest significant area in the trade direction. `TARGET_MODE=nearest` restores "any swing".
+- **Retest (pullback) entries:** if entering at the confirming close gives < 1:3 but a limit at the retest of the
+  broken level (base edge, or the sweep candle's extreme for dominance entries) gives >= 1:3, the alert is a
+  *limit idea* (`entry_style=pullback_limit`). It may never fill; replay now simulates fills (12-candle wait) and
+  cancels if the stop level trades first. `PULLBACK_ENABLED=false` disables it.
+- **Spread-aware R:R:** reward is reduced and risk increased by an assumed spread (`ASSUMED_SPREADS`, starting
+  estimates, NOT measured Deriv spreads). Replace them with measured values.
+- **Diagnostics:** `/replay SYMBOL [count] [nearest] [nopb] [nospread] [rr2]` and the `replay` MCP tool report
+  gate tallies, near-miss R:R values, simulated outcomes and net R. Use variants to measure how strict the
+  rules are before changing anything.
+- Caveat: retest entries make R:R look better but fills are not guaranteed (and losing trades fill more often),
+  so judge them by replay *outcomes*, not by planned R:R.

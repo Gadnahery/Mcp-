@@ -15,6 +15,8 @@ not user-confirmed strategy rules. Live alerts remain disabled by default until 
 """
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from statistics import median
 from typing import Any, Literal
@@ -31,6 +33,35 @@ CONFIRM_MAX_AGE = 2
 # Dominance path (notes v1.3: "two or three consecutive closes in the same direction with
 # strong bodies"): after the sweep, N consecutive closes in the trade direction, healthy bodies,
 # finishing beyond the sweep candle's extreme. Provisional thresholds.
+# Reaction-area ranking: a 15M swing counts as a *significant* reaction area when price
+# reacted away from it by >= SIG_REACTION_MULT x median 15M range within the next
+# SIG_REACTION_LOOKAHEAD candles, or when it was touched at least twice (equal highs/lows).
+SIG_REACTION_MULT = 1.0
+SIG_REACTION_LOOKAHEAD = 4
+# "significant" (default) targets the nearest significant area; "nearest" uses any 15M swing.
+TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
+# Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
+# retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
+PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
+MIN_RR = 3.0
+# Assumed all-in spread in price units, used to shrink reward and widen risk. These are
+# starting estimates, not measured Deriv values: override with ASSUMED_SPREADS="frxEURUSD=0.00012,...".
+_DEFAULT_SPREADS = {"frxEURUSD": 0.00012, "frxGBPUSD": 0.00015, "frxXAUUSD": 0.35, "cryBTCUSD": 15.0}
+
+
+def _load_spreads() -> dict[str, float]:
+    spreads = dict(_DEFAULT_SPREADS)
+    for part in os.getenv("ASSUMED_SPREADS", "").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            try:
+                spreads[k.strip()] = float(v)
+            except ValueError:
+                pass
+    return spreads
+
+
+ASSUMED_SPREADS: dict[str, float] = _load_spreads()
 DOMINANCE_CLOSES = 3
 DOMINANCE_MIN_MEAN_BODY = 0.45   # mean body/range of the streak candles
 DOMINANCE_MIN_BODY = 0.20        # no single streak candle may be a doji-like sliver
@@ -61,6 +92,7 @@ class Analysis:
     evidence: tuple[str, ...]
     missing: tuple[str, ...]
     candidate: Candidate | None = None
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 def _valid(c: dict[str, Any]) -> bool:
@@ -113,6 +145,68 @@ def _swing_levels(candles: list[dict[str, Any]], wing: int = 2) -> tuple[list[fl
         if lo < min(left_l) and lo <= min(right_l):
             lows.append(lo)
     return highs, lows
+
+
+def _swing_points(candles: list[dict[str, Any]], wing: int = 2) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    """Swing highs/lows as (index, price). Equal highs/lows count once (first occurrence)."""
+    highs: list[tuple[int, float]] = []
+    lows: list[tuple[int, float]] = []
+    for i in range(wing, len(candles) - wing):
+        hi, lo = float(candles[i]["high"]), float(candles[i]["low"])
+        left_h = [float(c["high"]) for c in candles[i - wing:i]]
+        right_h = [float(c["high"]) for c in candles[i + 1:i + wing + 1]]
+        left_l = [float(c["low"]) for c in candles[i - wing:i]]
+        right_l = [float(c["low"]) for c in candles[i + 1:i + wing + 1]]
+        if hi > max(left_h) and hi >= max(right_h):
+            highs.append((i, hi))
+        if lo < min(left_l) and lo <= min(right_l):
+            lows.append((i, lo))
+    return highs, lows
+
+
+def _reaction_areas(candles: list[dict[str, Any]], tolerance: float, median_range: float):
+    """Rank 15M swings by how much price actually reacted from them (significant vs minor)."""
+    highs, lows = _swing_points(candles)
+
+    def build(points: list[tuple[int, float]], kind: str) -> list[dict[str, Any]]:
+        areas = []
+        for i, level in points:
+            touches = sum(1 for _, other in points if abs(other - level) <= tolerance)
+            nxt = candles[i + 1:i + 1 + SIG_REACTION_LOOKAHEAD]
+            if not nxt:
+                reaction = 0.0
+            elif kind == "high":
+                reaction = level - min(float(c["low"]) for c in nxt)
+            else:
+                reaction = max(float(c["high"]) for c in nxt) - level
+            areas.append({"level": level, "touches": touches, "reaction": reaction,
+                          "significant": touches >= 2 or reaction >= SIG_REACTION_MULT * median_range})
+        return areas
+
+    return build(highs, "high"), build(lows, "low")
+
+
+def _plan_entry(side: str, market_entry: float, stop: float, target: float, retest: float | None,
+                retest_filled: bool, spread: float, min_rr: float = MIN_RR, pullback: bool = True) -> dict[str, Any]:
+    """Choose market-at-close or retest-limit entry; R:R is net of the assumed spread."""
+    def rr(entry: float) -> float:
+        risk = abs(entry - stop) + spread
+        reward = ((target - entry) if side == "BUY" else (entry - target)) - spread
+        return reward / risk if risk > 0 and reward > 0 else 0.0
+
+    rr_market = rr(market_entry)
+    plan: dict[str, Any] = {"style": None, "entry": market_entry, "rr": rr_market, "rr_market": rr_market, "rr_pullback": None}
+    if rr_market >= min_rr:
+        plan["style"] = "market"
+        return plan
+    if pullback and retest is not None and not retest_filled:
+        valid = (stop < retest < market_entry) if side == "BUY" else (market_entry < retest < stop)
+        if valid:
+            rr_pb = rr(retest)
+            plan["rr_pullback"] = rr_pb
+            if rr_pb >= min_rr:
+                plan.update(style="pullback_limit", entry=retest, rr=rr_pb)
+    return plan
 
 
 def _indecision_or_base(candles: list[dict[str, Any]], count: int = 3) -> tuple[bool, str]:
@@ -169,8 +263,16 @@ def analyze_setup(
     symbol: str,
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
+    opts: dict[str, Any] | None = None,
 ) -> Analysis:
-    """Evaluate the setup using 15M context and 5M execution candles."""
+    """Evaluate the setup using 15M context and 5M execution candles.
+
+    ``opts`` (diagnostics only; live monitor passes None): target_mode, pullback, min_rr, spread.
+    """
+    opts = opts or {}
+    target_mode = str(opts.get("target_mode", TARGET_MODE))
+    pullback_on = bool(opts.get("pullback", PULLBACK_ENABLED))
+    min_rr = float(opts.get("min_rr", MIN_RR))
     raw = {"15M": candles_15m, "5M": candles_5m}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     evidence: list[str] = []
@@ -200,6 +302,8 @@ def analyze_setup(
     ref_lows = sorted(set(ref_lows))
     recent_15m_ranges = [float(c["high"]) - float(c["low"]) for c in m15[-20:]]
     tolerance = median(recent_15m_ranges) * 0.15 if recent_15m_ranges else 0.0
+    median_15m_range = median(recent_15m_ranges) if recent_15m_ranges else 0.0
+    areas_high, areas_low = _reaction_areas(m15[-100:], tolerance, median_15m_range)
     if tolerance <= 0:
         return Analysis(symbol, "NO_TRADE", None, "location", tuple(evidence), ("Could not estimate a usable reaction-area tolerance",))
 
@@ -267,6 +371,7 @@ def analyze_setup(
 
     confirm: dict[str, Any] | None = None
     path = ""
+    reaction_high = reaction_low = None
     if base:
         reaction = after_sweep[:3]
         reaction_high = max(float(c["high"]) for c in reaction)
@@ -298,39 +403,64 @@ def analyze_setup(
     # is deliberately not fabricated: the notes say timing is context-dependent and
     # the exact pullback decision rules are still open.
     entry = float(confirm["close"])
+    spread = float(opts.get("spread", ASSUMED_SPREADS.get(symbol, 0.0)))
+    pool = areas_high if side == "BUY" else areas_low
+    if target_mode != "nearest":
+        pool = [a for a in pool if a["significant"]]
     if side == "BUY":
         stop = min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1])
-        risk = entry - stop
-        target_levels = [x for x in ref_highs if x > entry]
-        target = min(target_levels) if target_levels else None
+        ahead = [a for a in pool if a["level"] > entry]
+        target_area = min(ahead, key=lambda a: a["level"]) if ahead else None
+        retest = reaction_high if path == "base_break" else float(sweep["high"])
+        retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:]) if retest is not None else True
     else:
         stop = max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1])
-        risk = stop - entry
-        target_levels = [x for x in ref_lows if x < entry]
-        target = max(target_levels) if target_levels else None
+        ahead = [a for a in pool if a["level"] < entry]
+        target_area = max(ahead, key=lambda a: a["level"]) if ahead else None
+        retest = reaction_low if path == "base_break" else float(sweep["low"])
+        retest_filled = any(float(c["high"]) >= retest for c in m5[confirm_index + 1:]) if retest is not None else True
+    risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + ["Structural stop does not produce positive risk"]))
-    if target is None:
-        return Analysis(symbol, "NO_TRADE", side, "target", tuple(evidence), tuple(missing + ["No next detected higher-timeframe reaction reference in the trade direction"]))
-    reward = (target - entry) if side == "BUY" else (entry - target)
-    rr = reward / risk
-    if reward <= 0 or rr < 3.0:
-        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [f"Next detected reaction area offers only 1:{rr:.2f}; minimum is 1:3"]))
-    evidence.append(f"Structural stop at {stop:.5f}; next detected reaction reference at {target:.5f}; planned R:R 1:{rr:.2f}")
-    evidence.append("Entry-at-close is provisional; context-dependent pullback comparison is not yet implemented")
+    if target_area is None:
+        kind = "significant 15M reaction area" if target_mode != "nearest" else "15M reaction reference"
+        return Analysis(symbol, "NO_TRADE", side, "target", tuple(evidence), tuple(missing + [f"No {kind} ahead in the trade direction"]), None, {"confirm_epoch": int(confirm["epoch"]), "no_target": True})
+    target = float(target_area["level"])
+    plan = _plan_entry(side, entry, stop, target, retest, retest_filled, spread, min_rr, pullback_on)
+    if plan["style"] is None:
+        msg = f"Next reaction area offers only 1:{plan['rr_market']:.2f} at the confirming close (net of assumed spread {spread:g}); minimum is 1:{min_rr:g}"
+        if plan["rr_pullback"] is not None:
+            msg += f"; a retest entry would offer 1:{plan['rr_pullback']:.2f}"
+        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"]})
+    style = ("pullback_limit" if plan["style"] == "pullback_limit"
+             else ("dominance_closes" if path == "dominance_closes" else "decisive_close"))
+    final_entry = float(plan["entry"])
+    rr = float(plan["rr"])
+    area_note = (f"touched {target_area['touches']}x, reaction {target_area['reaction']:.5f}"
+                 if target_mode != "nearest" else "nearest swing")
+    evidence.append(f"Structural stop at {stop:.5f}; target = {'significant ' if target_mode != 'nearest' else ''}15M reaction area at {target:.5f} ({area_note}); planned R:R 1:{rr:.2f} net of assumed spread {spread:g}")
+    if style == "pullback_limit":
+        evidence.append(f"Market entry at {entry:.5f} only offers 1:{plan['rr_market']:.2f}; LIMIT idea at the retest of the broken level {final_entry:.5f} (may never fill)")
+        invalidation = (f"Limit idea only. Cancel if price trades {'below' if side == 'BUY' else 'above'} {stop:.5f} before filling, "
+                        "or if it moves away without retesting; do not chase.")
+    else:
+        evidence.append("Entry at the confirming close; a retest entry is not required")
+        if plan["rr_pullback"] is not None:
+            evidence.append(f"Alternative retest entry at {float(retest):.5f} would offer 1:{plan['rr_pullback']:.2f} (less risk, but may not fill)")
+        invalidation = f"Setup invalid if price trades {'below' if side == 'BUY' else 'above'} {stop:.5f}."
     candidate = Candidate(
         symbol=symbol,
         side=side,
-        entry=entry,
+        entry=final_entry,
         stop_loss=stop,
         take_profit=target,
         risk_reward=rr,
         candle_epoch=int(confirm["epoch"]),
         explanation=" ".join(evidence) + " Research candidate only; the automated swing/zone and base detectors are provisional.",
-        invalidation=(f"Setup invalid if price trades below {stop:.5f}." if side == "BUY" else f"Setup invalid if price trades above {stop:.5f}."),
+        invalidation=invalidation,
         evidence=tuple(evidence),
-        entry_style="dominance_closes" if path == "dominance_closes" else "decisive_close",
-        target_reference="nearest detected higher-timeframe swing in trade direction",
+        entry_style=style,
+        target_reference=("nearest significant 15M reaction area in trade direction" if target_mode != "nearest" else "nearest detected 15M swing in trade direction"),
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)
 

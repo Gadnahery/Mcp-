@@ -28,26 +28,32 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(_dominance(candles, 3), "bullish")
 
     def test_no_signal_when_timeframe_data_is_missing(self):
-        self.assertIsNone(detect_candidate("TEST", [], [], []))
+        self.assertIsNone(detect_candidate("TEST", [], []))
 
     def test_no_signal_when_higher_timeframe_dominance_disagrees(self):
-        h1 = candles_from_closes([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], step=3600)
         m15 = candles_from_closes([20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10], step=900)
         m5 = candles_from_closes([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], step=300)
-        m1 = candles_from_closes([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
-        self.assertIsNone(detect_candidate("TEST", h1, m15, m5))
+        self.assertIsNone(detect_candidate("TEST", m15, m5))
 
     def test_no_trade_on_flat_ambiguous_market(self):
         flat = candles_from_closes([10] * 30, spread=0.2)
-        result = analyze_setup("TEST", flat, flat, flat)
+        result = analyze_setup("TEST", flat, flat)
         self.assertEqual(result.status, "NO_TRADE")
         self.assertIsNone(result.candidate)
 
-    def test_three_timeframe_mode_accepts_omitted_one_minute_data(self):
+    def test_two_timeframe_mode_runs_without_hourly_data(self):
         flat = candles_from_closes([10] * 30, spread=0.2)
-        result = analyze_setup("TEST", flat, flat, flat)
+        result = analyze_setup("TEST", flat, flat)
         self.assertEqual(result.status, "NO_TRADE")
         self.assertIsNone(result.candidate)
+
+    def test_unclear_15m_does_not_reject_clear_5m_as_opposed(self):
+        m15 = candles_from_closes([10, 11, 10, 11, 10, 11, 10, 11, 10, 11,
+                                   10, 11, 10, 11, 10, 11, 10, 11, 10, 11,
+                                   10, 11, 10, 11], spread=0.2, step=900)
+        m5 = candles_from_closes(list(range(10, 40)), spread=0.2, step=300)
+        result = analyze_setup("TEST", m15, m5)
+        self.assertNotEqual(result.stage, "approach")
 
     def test_sweep_alone_never_returns_candidate(self):
         # Data without clear higher-timeframe close-to-close dominance cannot pass context.

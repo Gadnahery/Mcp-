@@ -27,6 +27,17 @@ SYMBOL_ALIASES: dict[str, str] = {
     "frxeurusd": "frxEURUSD",
     "frxgbpusd": "frxGBPUSD",
     "crybtcusd": "cryBTCUSD",
+    # Volatility indices
+    "v75": "R_75",
+    "vol75": "R_75",
+    "volatility75": "R_75",
+    "r75": "R_75",
+    "r_75": "R_75",
+    "v25": "R_25",
+    "vol25": "R_25",
+    "volatility25": "R_25",
+    "r25": "R_25",
+    "r_25": "R_25",
 }
 
 HELP_TEXT = """🤖 Deriv Strategy Bot
@@ -34,15 +45,15 @@ HELP_TEXT = """🤖 Deriv Strategy Bot
 Commands:
 /status — overall monitor status
 /pair SYMBOL — latest live result for one pair
-  e.g. /pair gold  /pair eur  /pair btc
+  e.g. /pair gold  /pair btc  /pair v75  /pair v25
 /replay SYMBOL — historical replay (was there a setup?)
-  e.g. /replay btc  /replay gold
+  e.g. /replay btc  /replay v75  /replay v25
   Optional count: /replay btc 200  (5M candles, 60-400)
 /candidates — recent live trade candidates
 /symbols — list monitored symbols
 /help — this message
 
-Shortcuts: /gold /eur /gbp /btc
+Shortcuts: /gold /eur /gbp /btc /v75 /v25
 """
 
 
@@ -231,6 +242,10 @@ def handle_command(
         return format_pair("frxGBPUSD", status)
     if cmd in ("/btc", "/btcusd", "/bitcoin"):
         return format_pair("cryBTCUSD", status)
+    if cmd in ("/v75", "/vol75", "/r75", "/r_75"):
+        return format_pair("R_75", status)
+    if cmd in ("/v25", "/vol25", "/r25", "/r_25"):
+        return format_pair("R_25", status)
     if cmd == "/replay":
         # Handled asynchronously in command_loop (needs market data).
         return "__REPLAY__"
@@ -266,7 +281,7 @@ async def run_replay_command(text: str) -> str:
         from .replay_engine import format_replay_report, run_replay
 
         api = DerivMarketData()
-        m15 = await api.candles(symbol, "15m", min(500, count // 3 + 60))
+        m15 = await api.candles(symbol, "15m", max(60, count // 3))
         m5 = await api.candles(symbol, "5m", count)
         result = run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)))
         return format_replay_report(result)

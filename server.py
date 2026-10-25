@@ -323,6 +323,59 @@ async def get_symbol_info(symbol: str) -> dict:
 
 # ====================== RUN ======================
 
+
+@mcp.custom_route("/telegram", methods=["POST"])
+async def telegram_webhook(request: Request):
+    """Telegram webhook: answers commands even after free-tier cold start."""
+    from starlette.responses import PlainTextResponse, JSONResponse
+    import monitor_worker
+    from monitoring.telegram_commands import handle_command, run_replay_command, send_message
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    allowed = str(os.getenv("TELEGRAM_CHAT_ID", ""))
+    if not token:
+        return PlainTextResponse("no token", status_code=503)
+
+    try:
+        update = await request.json()
+    except Exception:
+        return PlainTextResponse("bad json", status_code=400)
+
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat = msg.get("chat") or {}
+    chat_id = str(chat.get("id", ""))
+    text = (msg.get("text") or "").strip()
+    if not text.startswith("/"):
+        return PlainTextResponse("ok")
+    if allowed and chat_id != allowed:
+        logger.warning("Webhook ignore chat %s", chat_id)
+        return PlainTextResponse("ok")
+
+    def status_provider():
+        try:
+            st = dict(monitor_worker.STATUS)
+            st["running"] = st.get("started_at") is not None
+            return st
+        except Exception as exc:
+            return {"running": False, "error": str(exc)}
+
+    cmd0 = text.split()[0].lower().split("@")[0]
+    try:
+        if cmd0 == "/replay":
+            await send_message(token, chat_id, "⏳ Running replay…")
+            reply = await run_replay_command(text)
+        else:
+            reply = handle_command(text, status_provider)
+        await send_message(token, chat_id, reply)
+    except Exception:
+        logger.exception("Webhook command failed: %s", text[:80])
+        try:
+            await send_message(token, chat_id, "Error handling that command. Try again.")
+        except Exception:
+            pass
+    return PlainTextResponse("ok")
+
+
 def _monitor_status() -> dict:
     try:
         import monitor_worker

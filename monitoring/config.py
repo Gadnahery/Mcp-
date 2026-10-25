@@ -8,9 +8,7 @@ DEFAULT_SYMBOLS = (
     "frxXAUUSD",
     "frxEURUSD",
     "frxGBPUSD",
-    "frxUSDCAD",
     "cryBTCUSD",
-    "R_100",
 )
 
 

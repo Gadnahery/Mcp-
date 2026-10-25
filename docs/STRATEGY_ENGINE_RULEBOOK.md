@@ -168,3 +168,18 @@ The validation approach follows standard backtesting cautions: use explicit rule
 
 ---
 **Bottom line:** this is a cautious, rule-based candidate engine, not a proven profitable system. Stronger means clearer rules, safe failure modes, reproducible tests, and evidence from unseen data—not simply more signals.
+
+## Update 2026-10-25 — provisional threshold changes (approved for testing)
+
+- **Sweep depth (gate D):** a 5M candle counts as a sweep when it trades beyond a 15M swing level by up to
+  0.75 x the median 15M range (previously the 15% tolerance also capped sweep depth, so deeper sweeps were ignored)
+  and the 5M close returns back across the level.
+- **Detection window:** the sweep candle may be up to 10 completed 5M candles old (previously exactly 5-6).
+- **Freshness:** the confirming close must be one of the latest 2 completed 5M candles; older confirmations are
+  rejected as stale.
+- **Swing levels:** equal highs/lows now count as one level (previously excluded).
+- **Symbols:** default list is XAUUSD, EURUSD, GBPUSD, BTCUSD.
+- **Target rule unchanged:** nearest detected 15M swing in the trade direction; it will reject most setups,
+  which is the conservative failure mode. Use `replay.py` to measure rejection by gate before changing it.
+- **Tooling:** `replay.py` (candle-by-candle replay with gate tally and outcomes) and `scripts/fetch_history.py`.
+- Still not established: profitability, out-of-sample results, spread/slippage-aware R:R.

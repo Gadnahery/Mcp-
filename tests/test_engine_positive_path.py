@@ -67,3 +67,34 @@ class PositivePathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SweepAndFreshnessTests(unittest.TestCase):
+    def test_deeper_sweep_within_range_multiple_is_detected(self):
+        m15, m5 = build(depth=2.0)
+        self.assertEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+
+    def test_sweep_far_beyond_the_level_is_not_a_sweep(self):
+        m15, m5 = build(depth=9.0)  # more than 0.75x the median 15M range
+        result = analyze_setup("TEST", m15, m5)
+        self.assertNotEqual(result.status, "CANDIDATE")
+        self.assertEqual(result.stage, "location_or_sweep")
+
+    def test_old_confirmation_is_stale_and_rejected(self):
+        m15, m5 = build()
+        last = m5[-2]["close"]
+        extra = []
+        for k in range(1, 4):  # three more completed candles after the confirming close
+            o = last + (k - 1) * 0.2
+            extra.append(dict(epoch=m5[-1]["epoch"] + 300 * k, open=o, high=o + 0.4, low=o - 0.1, close=o + 0.2))
+        # drop the old forming candle, append completed extras plus a new forming candle
+        m5b = m5[:-1] + extra + [dict(extra[-1], epoch=extra[-1]["epoch"] + 300)]
+        result = analyze_setup("TEST", m15, m5b)
+        self.assertNotEqual(result.status, "CANDIDATE")
+
+    def test_equal_highs_count_as_one_swing_level(self):
+        from monitoring.strategy import _swing_levels
+        rows = [(10, 11, 9, 10)] * 3 + [(10, 15, 9, 10), (10, 15, 9, 10)] + [(10, 11, 9, 10)] * 3
+        candles = _mk(rows, 1, 60)
+        highs, _ = _swing_levels(candles)
+        self.assertEqual(highs.count(15), 1)

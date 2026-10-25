@@ -21,6 +21,14 @@ from typing import Any, Literal
 
 Side = Literal["BUY", "SELL"]
 
+# Provisional, user-approved-for-testing thresholds (review after replay/paper results).
+# A sweep may trade beyond a 15M swing level by up to this multiple of the median 15M range.
+SWEEP_MAX_DEPTH_MULT = 0.75
+# The sweep candle may sit up to this many completed 5M candles before the latest one.
+SWEEP_LOOKBACK = 10
+# The confirming close must be one of the latest N completed 5M candles (fresh entry only).
+CONFIRM_MAX_AGE = 2
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -87,19 +95,18 @@ def _swing_levels(candles: list[dict[str, Any]], wing: int = 2) -> tuple[list[fl
     if len(candles) < 2 * wing + 1:
         return highs, lows
     for i in range(wing, len(candles) - wing):
-        window = candles[i - wing:i + wing + 1]
         hi = float(candles[i]["high"])
         lo = float(candles[i]["low"])
-        if hi == max(float(c["high"]) for c in window) and sum(float(c["high"]) == hi for c in window) == 1:
+        left_h = [float(c["high"]) for c in candles[i - wing:i]]
+        right_h = [float(c["high"]) for c in candles[i + 1:i + wing + 1]]
+        left_l = [float(c["low"]) for c in candles[i - wing:i]]
+        right_l = [float(c["low"]) for c in candles[i + 1:i + wing + 1]]
+        # Ties on the right are allowed so equal highs/lows (liquidity pools) still count once.
+        if hi > max(left_h) and hi >= max(right_h):
             highs.append(hi)
-        if lo == min(float(c["low"]) for c in window) and sum(float(c["low"]) == lo for c in window) == 1:
+        if lo < min(left_l) and lo <= min(right_l):
             lows.append(lo)
     return highs, lows
-
-
-def _near_any(price: float, levels: list[float], tolerance: float) -> float | None:
-    matches = [level for level in levels if abs(price - level) <= tolerance]
-    return min(matches, key=lambda level: abs(price - level)) if matches else None
 
 
 def _indecision_or_base(candles: list[dict[str, Any]], count: int = 3) -> tuple[bool, str]:
@@ -185,20 +192,21 @@ def analyze_setup(
     side: Side | None = None
     sweep: dict[str, Any] | None = None
     swept_level: float | None = None
-    recent = m5[-12:]
+    max_depth = median(recent_15m_ranges) * SWEEP_MAX_DEPTH_MULT
     possible: list[tuple[int, Side, dict[str, Any], float]] = []
-    for i in range(max(0, len(recent) - 6), len(recent) - 2):
-        candle = recent[i]
+    first = max(8, len(m5) - 1 - SWEEP_LOOKBACK)
+    for i in range(first, len(m5) - 4):  # need 3 reaction candles + a later confirming close
+        candle = m5[i]
         low, high, close = float(candle["low"]), float(candle["high"]), float(candle["close"])
-        low_level = _near_any(low, ref_lows, tolerance)
-        high_level = _near_any(high, ref_highs, tolerance)
-        if low_level is not None and low < low_level and close > low_level:
-            possible.append((i, "BUY", candle, low_level))
-        if high_level is not None and high > high_level and close < high_level:
-            possible.append((i, "SELL", candle, high_level))
+        swept_lows = [lv for lv in ref_lows if low < lv <= low + max_depth and close > lv]
+        swept_highs = [lv for lv in ref_highs if high > lv >= high - max_depth and close < lv]
+        if swept_lows:
+            possible.append((i, "BUY", candle, max(swept_lows)))
+        if swept_highs:
+            possible.append((i, "SELL", candle, min(swept_highs)))
     if possible:
-        # Prefer the latest sweep. If context conflicts with it, preserve the setup
-        # for confirmation analysis but record that extra evidence is required.
+        # Prefer the latest sweep. If context conflicts with it, keep the setup for
+        # confirmation analysis but record that extra evidence is required.
         _, side, sweep, swept_level = possible[-1]
         if context_bias and ((context_bias == "bullish" and side == "SELL") or (context_bias == "bearish" and side == "BUY")):
             evidence.append(f"{side} sweep runs against current dominant close-to-close bias; require especially clear confirmation")
@@ -245,6 +253,8 @@ def analyze_setup(
     confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
     if confirm_index is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate confirmation candle in ordered data",))
+    if confirm_index < len(m5) - CONFIRM_MAX_AGE:
+        return Analysis(symbol, "NO_TRADE", side, "stale_confirmation", tuple(evidence), (f"Confirmation is older than {CONFIRM_MAX_AGE} completed 5M candles; entry would be stale",))
     # Entry is at the confirming close in this first implementation. Pullback entry
     # is deliberately not fabricated: the notes say timing is context-dependent and
     # the exact pullback decision rules are still open.

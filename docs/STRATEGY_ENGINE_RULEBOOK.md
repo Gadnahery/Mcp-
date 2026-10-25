@@ -183,3 +183,23 @@ The validation approach follows standard backtesting cautions: use explicit rule
   which is the conservative failure mode. Use `replay.py` to measure rejection by gate before changing it.
 - **Tooling:** `replay.py` (candle-by-candle replay with gate tally and outcomes) and `scripts/fetch_history.py`.
 - Still not established: profitability, out-of-sample results, spread/slippage-aware R:R.
+
+## Update 2026-10-25 (2) — dominance confirmation path (approved for testing)
+
+After a 5M sweep-and-reclaim at a 15M swing level, control can now be confirmed two ways
+(the earliest confirming candle wins; entry is that candle's close):
+
+1. **Base then break** (unchanged): a compact/indecisive reaction, then a close beyond its range.
+2. **Dominance closes** (new, from notes v1.3 "two or three consecutive closes with strong bodies"):
+   `DOMINANCE_CLOSES = 3` consecutive closes in the trade direction (close-to-close, starting from
+   the sweep candle's close), mean body/range >= 0.45, no streak candle below 0.20, and the final close
+   beyond the sweep candle's extreme (above its high for BUY, below its low for SELL).
+
+Unchanged gates: structural stop beyond the swept extreme (lowest low / highest high from sweep to
+confirmation), nearest 15M swing in the trade direction as target, minimum 1:3, fresh confirmation
+(latest 2 completed 5M candles), alert-only. All thresholds above are provisional and live in
+`monitoring/strategy.py` constants.
+
+Known gaps (not yet implemented): pullback entries; ranking multiple reaction areas by significance;
+spread/slippage-aware R:R; evidence of profitability. Review `/replay` output across all four pairs
+before relying on alerts.

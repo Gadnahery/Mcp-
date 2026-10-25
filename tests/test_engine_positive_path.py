@@ -98,3 +98,43 @@ class SweepAndFreshnessTests(unittest.TestCase):
         candles = _mk(rows, 1, 60)
         highs, _ = _swing_levels(candles)
         self.assertEqual(highs.count(15), 1)
+
+
+def _impulse(post):
+    """Approach + sweep from build(), then custom post-sweep candles (o, c), then a forming candle."""
+    m15, m5 = build()
+    head = m5[:21]  # 20 approach candles + the sweep candle
+    out, t = list(head), head[-1]["epoch"]
+    for k, (o, c) in enumerate(post, 1):
+        out.append(dict(epoch=t + 300 * k, open=o, high=max(o, c) + 0.1, low=min(o, c) - 0.1, close=c))
+    last = out[-1]["close"]
+    out.append(dict(epoch=out[-1]["epoch"] + 300, open=last, high=last + 0.2, low=last - 0.1, close=last + 0.1))
+    return m15, out
+
+
+class DominancePathTests(unittest.TestCase):
+    def test_impulsive_reversal_with_three_strong_closes_is_a_candidate(self):
+        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2), (102.2, 103.1)])
+        result = analyze_setup("TEST", m15, m5)
+        self.assertEqual(result.status, "CANDIDATE", (result.stage, result.missing))
+        self.assertEqual(result.candidate.entry_style, "dominance_closes")
+        self.assertEqual(result.candidate.side, "BUY")
+
+    def test_two_strong_closes_are_not_enough(self):
+        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2), (102.2, 102.0)])
+        self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+
+    def test_three_tiny_bodied_closes_do_not_count_as_control(self):
+        # closes rise but bodies are slivers inside long wicks: not strong control
+        post = [(100.40, 100.43), (100.43, 100.46), (100.46, 100.49)]
+        m15, m5 = _impulse(post)
+        for c in m5[21:24]:
+            c["high"] += 1.0
+            c["low"] -= 1.0
+        self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+
+    def test_streak_must_finish_beyond_the_sweep_candle(self):
+        # rising closes but never clearing the sweep candle's high (100.2): no control shown
+        post = [(100.00, 100.05), (100.05, 100.10), (100.10, 100.15)]
+        m15, m5 = _impulse(post)
+        self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")

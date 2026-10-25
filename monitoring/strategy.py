@@ -28,6 +28,12 @@ SWEEP_MAX_DEPTH_MULT = 0.75
 SWEEP_LOOKBACK = 10
 # The confirming close must be one of the latest N completed 5M candles (fresh entry only).
 CONFIRM_MAX_AGE = 2
+# Dominance path (notes v1.3: "two or three consecutive closes in the same direction with
+# strong bodies"): after the sweep, N consecutive closes in the trade direction, healthy bodies,
+# finishing beyond the sweep candle's extreme. Provisional thresholds.
+DOMINANCE_CLOSES = 3
+DOMINANCE_MIN_MEAN_BODY = 0.45   # mean body/range of the streak candles
+DOMINANCE_MIN_BODY = 0.20        # no single streak candle may be a doji-like sliver
 
 
 @dataclass(frozen=True)
@@ -134,6 +140,31 @@ def _indecision_or_base(candles: list[dict[str, Any]], count: int = 3) -> tuple[
     return False, "No clear compact base detected"
 
 
+def _dominance_confirm(side: str, sweep: dict[str, Any], after_sweep: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """First candle completing a run of consecutive closes in the trade direction after the sweep.
+
+    Close-to-close (not candle colour), starting from the sweep candle's close; the run needs
+    healthy bodies and must finish beyond the sweep candle's extreme in the trade direction.
+    """
+    prev_close = float(sweep["close"])
+    streak: list[dict[str, Any]] = []
+    for c in after_sweep:
+        close = float(c["close"])
+        moved = close > prev_close if side == "BUY" else close < prev_close
+        streak = streak + [c] if moved else []
+        prev_close = close
+        if len(streak) >= DOMINANCE_CLOSES:
+            last = streak[-DOMINANCE_CLOSES:]
+            ratios = []
+            for k in last:
+                rng = float(k["high"]) - float(k["low"])
+                ratios.append(abs(float(k["close"]) - float(k["open"])) / rng if rng > 0 else 0.0)
+            beyond = close > float(sweep["high"]) if side == "BUY" else close < float(sweep["low"])
+            if beyond and sum(ratios) / len(ratios) >= DOMINANCE_MIN_MEAN_BODY and min(ratios) >= DOMINANCE_MIN_BODY:
+                return c
+    return None
+
+
 def analyze_setup(
     symbol: str,
     candles_15m: list[dict[str, Any]],
@@ -195,7 +226,7 @@ def analyze_setup(
     max_depth = median(recent_15m_ranges) * SWEEP_MAX_DEPTH_MULT
     possible: list[tuple[int, Side, dict[str, Any], float]] = []
     first = max(8, len(m5) - 1 - SWEEP_LOOKBACK)
-    for i in range(first, len(m5) - 4):  # need 3 reaction candles + a later confirming close
+    for i in range(first, len(m5) - 3):  # need at least 3 completed candles after the sweep
         candle = m5[i]
         low, high, close = float(candle["low"]), float(candle["high"]), float(candle["close"])
         swept_lows = [lv for lv in ref_lows if low < lv <= low + max_depth and close > lv]
@@ -233,23 +264,31 @@ def analyze_setup(
     # after the sweep, then requires a later close beyond that reaction's range.
     base, base_note = _indecision_or_base(before_cluster + [sweep] + after_sweep[:3], count=3)
     evidence.append(base_note)
-    if not base:
-        return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("No clear post-sweep indecision/base detected by the provisional heuristic; inspect rejection manually",))
 
-    reaction = after_sweep[:3]
-    reaction_high = max(float(c["high"]) for c in reaction)
-    reaction_low = min(float(c["low"]) for c in reaction)
     confirm: dict[str, Any] | None = None
-    for c in after_sweep[3:]:
-        if side == "BUY" and float(c["close"]) > reaction_high:
-            confirm = c
-            break
-        if side == "SELL" and float(c["close"]) < reaction_low:
-            confirm = c
-            break
+    path = ""
+    if base:
+        reaction = after_sweep[:3]
+        reaction_high = max(float(c["high"]) for c in reaction)
+        reaction_low = min(float(c["low"]) for c in reaction)
+        for c in after_sweep[3:]:
+            if side == "BUY" and float(c["close"]) > reaction_high:
+                confirm, path = c, "base_break"
+                break
+            if side == "SELL" and float(c["close"]) < reaction_low:
+                confirm, path = c, "base_break"
+                break
+    dom = _dominance_confirm(side, sweep, after_sweep)
+    if dom is not None and (confirm is None or int(dom["epoch"]) < int(confirm["epoch"])):
+        confirm, path = dom, "dominance_closes"
     if confirm is None:
-        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No later completed close beyond the post-sweep reaction range; sweep and indecision alone are not entry signals",))
-    evidence.append(f"Post-sweep reaction formed a possible base; later candle closed beyond its range at {float(confirm['close']):.5f}")
+        if base:
+            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No later completed close beyond the post-sweep reaction range, and no run of consecutive closes in the trade direction; sweep and indecision alone are not entry signals",))
+        return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("No base/indecision after the sweep and no run of consecutive strong closes in the trade direction yet",))
+    if path == "dominance_closes":
+        evidence.append(f"Control shown by {DOMINANCE_CLOSES} consecutive strong closes in the trade direction, finishing at {float(confirm['close']):.5f} beyond the sweep candle")
+    else:
+        evidence.append(f"Post-sweep reaction formed a possible base; later candle closed beyond its range at {float(confirm['close']):.5f}")
     confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
     if confirm_index is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate confirmation candle in ordered data",))
@@ -290,7 +329,7 @@ def analyze_setup(
         explanation=" ".join(evidence) + " Research candidate only; the automated swing/zone and base detectors are provisional.",
         invalidation=(f"Setup invalid if price trades below {stop:.5f}." if side == "BUY" else f"Setup invalid if price trades above {stop:.5f}."),
         evidence=tuple(evidence),
-        entry_style="decisive_close",
+        entry_style="dominance_closes" if path == "dominance_closes" else "decisive_close",
         target_reference="nearest detected higher-timeframe swing in trade direction",
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)

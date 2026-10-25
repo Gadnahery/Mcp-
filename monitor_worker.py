@@ -106,18 +106,23 @@ async def run() -> None:
     stats = {"cycles": 0, "scanned": 0, "stale": 0, "errors": 0, "candidates": 0}
     last_heartbeat = time.monotonic()
 
-    # Interactive Telegram commands (/status, /pair, /gold, ...)
+    # Interactive Telegram commands: prefer webhook (TELEGRAM_USE_WEBHOOK=true).
+    # Long-polling fights with free-tier sleep; webhook wakes the app on each message.
     cmd_task = None
+    use_webhook = os.getenv("TELEGRAM_USE_WEBHOOK", "true").lower() == "true"
     if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
-        def _status() -> dict[str, Any]:
-            out = dict(STATUS)
-            out["running"] = out.get("started_at") is not None
-            return out
+        if use_webhook:
+            logger.info("Telegram commands via webhook (long-poll disabled)")
+        else:
+            def _status() -> dict[str, Any]:
+                out = dict(STATUS)
+                out["running"] = out.get("started_at") is not None
+                return out
 
-        cmd_task = asyncio.create_task(
-            command_loop(settings.telegram_bot_token, settings.telegram_chat_id, _status)
-        )
-        logger.info("Telegram command bot enabled")
+            cmd_task = asyncio.create_task(
+                command_loop(settings.telegram_bot_token, settings.telegram_chat_id, _status)
+            )
+            logger.info("Telegram command bot enabled (long-poll)")
 
     await notify(
         "✅ Candle-behaviour monitor online\n"

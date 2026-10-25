@@ -323,7 +323,25 @@ async def get_symbol_info(symbol: str) -> dict:
 
 # ====================== RUN ======================
 
+def _start_monitor_thread() -> None:
+    """Run the optional strategy monitor inside this process (single free Render service)."""
+    import asyncio
+    import threading
+
+    def _run() -> None:
+        try:
+            import monitor_worker
+            asyncio.run(monitor_worker.run())
+        except Exception:
+            logger.exception("Strategy monitor thread stopped")
+
+    threading.Thread(target=_run, name="strategy-monitor", daemon=True).start()
+    logger.info("Strategy monitor started in-process")
+
+
 if __name__ == "__main__":
+    if os.getenv("MONITOR_IN_PROCESS", "false").lower() == "true":
+        _start_monitor_thread()
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
     logger.info(f"Starting Deriv MCP | transport={transport} host={HOST} port={PORT}")
 

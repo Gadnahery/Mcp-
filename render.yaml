@@ -13,3 +13,16 @@ services:
         sync: false   # set this manually in dashboard for security
       - key: PORT
         value: 10000
+      # --- optional strategy monitor (safe defaults: no Telegram, no alerts) ---
+      - key: MONITOR_IN_PROCESS
+        value: "true"
+      - key: MONITOR_SYMBOLS
+        value: frxXAUUSD,frxEURUSD,frxGBPUSD,cryBTCUSD
+      - key: TELEGRAM_ENABLED
+        value: "false"
+      - key: STRATEGY_ALERTS_ENABLED
+        value: "false"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false

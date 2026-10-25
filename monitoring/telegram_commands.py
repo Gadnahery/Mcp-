@@ -290,14 +290,39 @@ async def run_replay_command(text: str) -> str:
         return f"Replay failed for {symbol}: {exc}"
 
 
+async def _delete_webhook(bot_token: str) -> None:
+    """Ensure long-polling works (webhook and polling cannot run together)."""
+    url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook?drop_pending_updates=false"
+
+    def _call() -> None:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            json.loads(response.read().decode("utf-8"))
+
+    try:
+        await asyncio.to_thread(_call)
+        logger.info("Telegram webhook cleared for long-polling")
+    except Exception:
+        logger.exception("deleteWebhook failed (continuing)")
+
+
 async def command_loop(
     bot_token: str,
     allowed_chat_id: str,
     status_provider: Callable[[], dict[str, Any]],
 ) -> None:
     """Long-poll Telegram for commands from the allowed chat only."""
+    await _delete_webhook(bot_token)
     offset: int | None = None
     logger.info("Telegram command listener started (chat_id=%s)", allowed_chat_id)
+    try:
+        await send_message(
+            bot_token,
+            allowed_chat_id,
+            "🟢 Bot online again.\nSend /status /btc /v75 /v25 /replay btc",
+        )
+    except Exception:
+        logger.exception("Startup ping failed")
+
     while True:
         try:
             updates = await get_updates(bot_token, offset)
@@ -313,6 +338,7 @@ async def command_loop(
                     logger.warning("Ignoring command from unauthorized chat %s", chat_id)
                     continue
                 cmd0 = text.split()[0].lower().split("@")[0] if text else ""
+                logger.info("Command from %s: %s", chat_id, text[:80])
                 try:
                     if cmd0 == "/replay":
                         await send_message(bot_token, chat_id, "⏳ Running replay…")
@@ -321,13 +347,13 @@ async def command_loop(
                         reply = handle_command(text, status_provider)
                     await send_message(bot_token, chat_id, reply)
                 except Exception:
-                    logger.exception("Failed to reply to command")
+                    logger.exception("Failed to reply to command: %s", text[:80])
                     try:
-                        await send_message(bot_token, chat_id, "Error handling that command.")
+                        await send_message(bot_token, chat_id, "Error handling that command. Try again.")
                     except Exception:
                         pass
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Telegram command poll failed; retrying in 5s")
+        except Exception as exc:
+            logger.warning("Telegram poll error: %s; retrying in 5s", exc)
             await asyncio.sleep(5)

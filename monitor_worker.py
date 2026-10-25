@@ -44,7 +44,10 @@ def record_analysis(symbol: str, analysis: Any, now: int | None = None) -> None:
         "stage": analysis.stage, "why_not": list(analysis.missing)[:2],
         "evidence": list(analysis.evidence)[-3:],
     }
-    if analysis.candidate:
+    if analysis.candidate and not any(
+        x["symbol"] == symbol and x["confirm_epoch"] == analysis.candidate.candle_epoch
+        for x in STATUS["candidates"]
+    ):
         c = analysis.candidate
         STATUS["candidates"] = (STATUS["candidates"] + [{
             "found_at": now, "symbol": symbol, "side": c.side, "entry": c.entry,

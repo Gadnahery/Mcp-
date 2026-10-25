@@ -266,7 +266,7 @@ async def run_replay_command(text: str) -> str:
         from .replay_engine import format_replay_report, run_replay
 
         api = DerivMarketData()
-        m15 = await api.candles(symbol, "15m", max(60, count // 3))
+        m15 = await api.candles(symbol, "15m", min(500, count // 3 + 60))
         m5 = await api.candles(symbol, "5m", count)
         result = run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)))
         return format_replay_report(result)

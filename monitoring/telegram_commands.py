@@ -29,13 +29,16 @@ SYMBOL_ALIASES: dict[str, str] = {
     "crybtcusd": "cryBTCUSD",
 }
 
-HELP_TEXT = """🤖 *Deriv Strategy Bot*
+HELP_TEXT = """🤖 Deriv Strategy Bot
 
 Commands:
 /status — overall monitor status
-/pair SYMBOL — latest result for one pair
+/pair SYMBOL — latest live result for one pair
   e.g. /pair gold  /pair eur  /pair btc
-/candidates — recent trade candidates
+/replay SYMBOL — historical replay (was there a setup?)
+  e.g. /replay btc  /replay gold
+  Optional count: /replay btc 200  (5M candles, 60-400)
+/candidates — recent live trade candidates
 /symbols — list monitored symbols
 /help — this message
 
@@ -228,8 +231,48 @@ def handle_command(
         return format_pair("frxGBPUSD", status)
     if cmd in ("/btc", "/btcusd", "/bitcoin"):
         return format_pair("cryBTCUSD", status)
+    if cmd == "/replay":
+        # Handled asynchronously in command_loop (needs market data).
+        return "__REPLAY__"
 
     return "Unknown command. Send /help for the list."
+
+
+async def run_replay_command(text: str) -> str:
+    """Fetch candles from Deriv and run strategy replay for a symbol."""
+    parts = (text or "").split()
+    if len(parts) < 2:
+        return (
+            "Usage: /replay SYMBOL [candle_count]\n"
+            "Examples:\n"
+            "  /replay btc\n"
+            "  /replay gold 200\n"
+            "  /replay eur 150"
+        )
+    symbol = resolve_symbol(parts[1])
+    if not symbol:
+        return f"Unknown symbol '{parts[1]}'. Try: gold, eur, gbp, btc"
+
+    count = 180
+    if len(parts) >= 3:
+        try:
+            count = int(parts[2])
+        except ValueError:
+            return "Candle count must be a number (60–400)."
+    count = max(80, min(400, count))
+
+    try:
+        from .market_data import DerivMarketData
+        from .replay_engine import format_replay_report, run_replay
+
+        api = DerivMarketData()
+        m15 = await api.candles(symbol, "15m", max(60, count // 3))
+        m5 = await api.candles(symbol, "5m", count)
+        result = run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)))
+        return format_replay_report(result)
+    except Exception as exc:
+        logger.exception("Replay failed for %s", symbol)
+        return f"Replay failed for {symbol}: {exc}"
 
 
 async def command_loop(
@@ -254,11 +297,20 @@ async def command_loop(
                 if allowed_chat_id and chat_id != str(allowed_chat_id):
                     logger.warning("Ignoring command from unauthorized chat %s", chat_id)
                     continue
-                reply = handle_command(text, status_provider)
+                cmd0 = text.split()[0].lower().split("@")[0] if text else ""
                 try:
+                    if cmd0 == "/replay":
+                        await send_message(bot_token, chat_id, "⏳ Running replay…")
+                        reply = await run_replay_command(text)
+                    else:
+                        reply = handle_command(text, status_provider)
                     await send_message(bot_token, chat_id, reply)
                 except Exception:
                     logger.exception("Failed to reply to command")
+                    try:
+                        await send_message(bot_token, chat_id, "Error handling that command.")
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             raise
         except Exception:

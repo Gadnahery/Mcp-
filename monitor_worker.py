@@ -17,6 +17,7 @@ from monitoring.config import Settings
 from monitoring.market_data import DerivMarketData, GRANULARITIES
 from monitoring.strategy import analyze_setup
 from monitoring.telegram import format_candidate, send_telegram
+from monitoring.telegram_commands import command_loop
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -101,10 +102,25 @@ async def run() -> None:
     heartbeat_hours = float(os.getenv("HEARTBEAT_HOURS", "24"))
     stats = {"cycles": 0, "scanned": 0, "stale": 0, "errors": 0, "candidates": 0}
     last_heartbeat = time.monotonic()
+
+    # Interactive Telegram commands (/status, /pair, /gold, ...)
+    cmd_task = None
+    if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
+        def _status() -> dict[str, Any]:
+            out = dict(STATUS)
+            out["running"] = out.get("started_at") is not None
+            return out
+
+        cmd_task = asyncio.create_task(
+            command_loop(settings.telegram_bot_token, settings.telegram_chat_id, _status)
+        )
+        logger.info("Telegram command bot enabled")
+
     await notify(
         "✅ Candle-behaviour monitor online\n"
         f"Symbols: {', '.join(settings.symbols)}\n"
         f"Setup alerts: {'ON' if settings.alerts_enabled else 'OFF (test mode)'}\n"
+        "Commands: /status /pair gold /gold /eur /gbp /btc /candidates /help\n"
         "Research-only; places no orders."
     )
 

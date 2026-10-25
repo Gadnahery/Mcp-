@@ -129,12 +129,11 @@ def _indecision_or_base(candles: list[dict[str, Any]], count: int = 3) -> tuple[
 
 def analyze_setup(
     symbol: str,
-    candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
 ) -> Analysis:
-    """Evaluate the setup using only 1H, 15M and 5M candles."""
-    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m}
+    """Evaluate the setup using 15M context and 5M execution candles."""
+    raw = {"15M": candles_15m, "5M": candles_5m}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     evidence: list[str] = []
     missing: list[str] = []
@@ -149,31 +148,18 @@ def analyze_setup(
     # Exclude the newest candle in each stream because it may still be forming.
     for tf in data:
         data[tf] = data[tf][:-1]
-    h1, m15, m5 = data["1H"], data["15M"], data["5M"]
+    m15, m5 = data["15M"], data["5M"]
 
-    h1_dom = _dominance(h1, 3)
     m15_dom = _dominance(m15, 3)
-    if h1_dom:
-        evidence.append(f"1H close-to-close dominance: {h1_dom}")
-    else:
-        evidence.append("1H close-to-close dominance is mixed/unclear")
     if m15_dom:
         evidence.append(f"15M close-to-close dominance: {m15_dom}")
     else:
         evidence.append("15M close-to-close dominance is mixed/unclear")
-    # Softer context gate: disagreement is evidence, not an automatic veto.
-    # A clear opposing move on both higher timeframes remains a caution, but the
-    # engine may still inspect a reversal at a meaningful area instead of stopping.
-    context_conflict = bool(h1_dom and m15_dom and h1_dom != m15_dom)
-    if context_conflict:
-        evidence.append("1H/15M dominance disagree; reversal setup requires stronger local confirmation")
-    context_bias = h1_dom or m15_dom
-    # Identify nearby higher-timeframe reaction references. These are mechanically
-    # detected swing points; the notes do not yet define a fully automatic zone algorithm.
-    h1_highs, h1_lows = _swing_levels(h1[-80:])
-    m15_highs, m15_lows = _swing_levels(m15[-100:])
-    ref_highs = sorted(set(h1_highs + m15_highs))
-    ref_lows = sorted(set(h1_lows + m15_lows))
+    context_bias = m15_dom
+    # Use confirmed 15M swing references; 1H is intentionally removed.
+    ref_highs, ref_lows = _swing_levels(m15[-100:])
+    ref_highs = sorted(set(ref_highs))
+    ref_lows = sorted(set(ref_lows))
     recent_15m_ranges = [float(c["high"]) - float(c["low"]) for c in m15[-20:]]
     tolerance = median(recent_15m_ranges) * 0.15 if recent_15m_ranges else 0.0
     if tolerance <= 0:
@@ -185,12 +171,13 @@ def analyze_setup(
         evidence.append(f"5M close-to-close dominance: {m5_dom}")
     else:
         evidence.append("5M dominance is mixed/unclear; inspect the candle sequence at the area")
-    if m5_dom and m5_dom != h1_dom:
-        # A contrary 5M sequence can be a pullback, but we need to see that it has
-        # stopped making progress before considering a reversal.
+    # Only apply the opposing-direction filter when 15M has a clear direction.
+    # Previously, unclear 1H (None) made every clear 5M direction look opposed.
+    # Unclear context is not the same as opposing context.
+    if m5_dom and m15_dom and m5_dom != m15_dom:
         recent_5m = m5[-5:]
         if _dominance(recent_5m, 3) == m5_dom:
-            return Analysis(symbol, "NO_TRADE", None, "approach", tuple(evidence), ("5M is still making clear progress against the 1H/15M direction; no confirmed loss of that control",))
+            return Analysis(symbol, "NO_TRADE", None, "approach", tuple(evidence), ("5M is still making clear progress against the 15M direction; no confirmed loss of that control",))
 
     # Look for either a high sweep/rejection or a low sweep/reclaim at a meaningful
     # higher-timeframe reference. Context helps rank the setup; it does not dictate
@@ -218,7 +205,7 @@ def analyze_setup(
 
     if side is None or sweep is None or swept_level is None:
         return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (
-            "No recent 5M sweep-and-reclaim was found at a detected 1H/15M swing reference",
+            "No recent 5M sweep-and-reclaim was found at a detected 15M swing reference",
             "A swing reference is only a proxy for a meaningful area; review the chart context",
         ))
     evidence.append(f"5M swept and reclaimed detected higher-timeframe reference {swept_level:.5f}")
@@ -301,7 +288,6 @@ def analyze_setup(
 
 def analyze_annotated_short(
     symbol: str,
-    candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
     *,
@@ -319,18 +305,17 @@ def analyze_annotated_short(
     not a live signal generator. It checks the sequence around the marked levels;
     exact OHLC candles are required to validate timing.
     """
-    raw = {"1H": candles_1h, "15M": candles_15m, "5M": candles_5m}
+    raw = {"15M": candles_15m, "5M": candles_5m}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     missing: list[str] = []
     evidence: list[str] = []
     if any(len(data[tf]) < 20 for tf in data):
-        return Analysis(symbol, "NO_TRADE", "SELL", "data_quality", (), ("Need at least 20 valid candles per timeframe for replay context",))
-    # Drop the latest candle, which may still be forming.
+        return Analysis(symbol, "NO_TRADE", "SELL", "data_quality", (), ("Need at least 20 valid 15M and 5M candles for replay context",))
     data = {tf: cs[:-1] for tf, cs in data.items()}
-    h1_dom, m15_dom = _dominance(data["1H"], 3), _dominance(data["15M"], 3)
-    evidence.extend([f"1H dominance: {h1_dom or 'unclear'}", f"15M dominance: {m15_dom or 'unclear'}"])
-    if h1_dom != "bearish" or m15_dom != "bearish":
-        return Analysis(symbol, "NO_TRADE", "SELL", "higher_timeframe_context", tuple(evidence), ("The 1H and 15M must show bearish close-to-close dominance for this conservative replay gate",))
+    m15_dom = _dominance(data["15M"], 3)
+    evidence.append(f"15M dominance: {m15_dom or 'unclear'}")
+    if m15_dom not in (None, "bearish"):
+        return Analysis(symbol, "NO_TRADE", "SELL", "higher_timeframe_context", tuple(evidence), ("15M dominance is bullish, so this annotated short needs a stronger reversal confirmation",))
     m5_dom = _dominance(data["5M"], 3)
     evidence.append(f"5M approach dominance: {m5_dom or 'mixed/unclear'}")
     candles = data["5M"]
@@ -373,9 +358,8 @@ def analyze_annotated_short(
 
 def detect_candidate(
     symbol: str,
-    candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
 ) -> Candidate | None:
-    """Run the 1H/15M/5M strategy; 1M is not part of this test version."""
-    return analyze_setup(symbol, candles_1h, candles_15m, candles_5m).candidate
+    """Run the 15M/5M strategy; 1H and 1M are not required."""
+    return analyze_setup(symbol, candles_15m, candles_5m).candidate

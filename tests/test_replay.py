@@ -17,3 +17,15 @@ class ReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusTests(unittest.TestCase):
+    def test_record_analysis_tracks_candidates_and_stage_tally(self):
+        import monitor_worker
+        from monitoring.strategy import analyze_setup
+        monitor_worker.STATUS.update(stage_tally={}, symbols={}, candidates=[])
+        m15, m5 = build()
+        monitor_worker.record_analysis("TEST", analyze_setup("TEST", m15, m5), now=1)
+        self.assertEqual(monitor_worker.STATUS["stage_tally"].get("CANDIDATE"), 1)
+        self.assertEqual(monitor_worker.STATUS["candidates"][0]["side"], "BUY")
+        self.assertEqual(monitor_worker.STATUS["symbols"]["TEST"]["status"], "CANDIDATE")

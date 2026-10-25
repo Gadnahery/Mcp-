@@ -15,7 +15,7 @@ from typing import Any
 
 from monitoring.config import Settings
 from monitoring.market_data import DerivMarketData, GRANULARITIES
-from monitoring.strategy import detect_candidate
+from monitoring.strategy import analyze_setup
 from monitoring.telegram import format_candidate, send_telegram
 
 logging.basicConfig(
@@ -23,6 +23,37 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("strategy-monitor")
+
+
+# Live status shared with server.py (/status route and monitor_status MCP tool).
+STATUS: dict[str, Any] = {
+    "started_at": None, "last_cycle_at": None, "cycles": 0,
+    "alerts_enabled": False, "telegram_enabled": False,
+    "stage_tally": {}, "symbols": {}, "candidates": [],
+}
+
+
+def record_analysis(symbol: str, analysis: Any, now: int | None = None) -> None:
+    """Remember the latest verdict per symbol, a tally of where evaluations stop, and candidates."""
+    now = now or int(time.time())
+    stage = "CANDIDATE" if analysis.candidate else analysis.stage
+    STATUS["stage_tally"][stage] = STATUS["stage_tally"].get(stage, 0) + 1
+    STATUS["symbols"][symbol] = {
+        "checked_at": now, "data": "ok", "status": analysis.status, "side": analysis.side,
+        "stage": analysis.stage, "why_not": list(analysis.missing)[:2],
+        "evidence": list(analysis.evidence)[-3:],
+    }
+    if analysis.candidate:
+        c = analysis.candidate
+        STATUS["candidates"] = (STATUS["candidates"] + [{
+            "found_at": now, "symbol": symbol, "side": c.side, "entry": c.entry,
+            "stop": c.stop_loss, "target": c.take_profit, "rr": round(c.risk_reward, 2),
+            "confirm_epoch": c.candle_epoch,
+        }])[-20:]
+
+
+def record_data_state(symbol: str, state: str) -> None:
+    STATUS["symbols"][symbol] = {"checked_at": int(time.time()), "data": state}
 
 
 def load_state(path: str) -> dict[str, Any]:
@@ -47,6 +78,8 @@ async def run() -> None:
     if settings.telegram_enabled and (not settings.telegram_bot_token or not settings.telegram_chat_id):
         raise RuntimeError("Telegram enabled but bot token/chat ID is missing")
 
+    STATUS.update(started_at=int(time.time()), alerts_enabled=settings.alerts_enabled,
+                  telegram_enabled=settings.telegram_enabled)
     api = DerivMarketData(settings.deriv_app_id)
     state = load_state(settings.state_path)
     state.setdefault("sent", {})
@@ -97,12 +130,13 @@ async def run() -> None:
                 if stale:
                     logger.warning("%s: stale/incomplete data on %s; skipping", symbol, ",".join(stale))
                     stats["stale"] += 1
+                    record_data_state(symbol, "stale_or_market_closed")
                     continue
                 stats["scanned"] += 1
 
-                candidate = detect_candidate(
-                    symbol, data["15m"], data["5m"]
-                )
+                analysis = analyze_setup(symbol, data["15m"], data["5m"])
+                record_analysis(symbol, analysis)
+                candidate = analysis.candidate
                 if candidate is None:
                     logger.info("%s: no complete candidate", symbol)
                     continue
@@ -130,8 +164,11 @@ async def run() -> None:
                 raise
             except Exception:
                 stats["errors"] += 1
+                record_data_state(symbol, "error")
                 logger.exception("%s: monitoring cycle failed; will retry next cycle", symbol)
         stats["cycles"] += 1
+        STATUS["cycles"] += 1
+        STATUS["last_cycle_at"] = int(time.time())
         if heartbeat_hours > 0 and time.monotonic() - last_heartbeat >= heartbeat_hours * 3600:
             await notify(
                 f"💓 Monitor alive — {stats['cycles']} cycles, {stats['scanned']} symbol scans, "

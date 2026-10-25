@@ -323,6 +323,29 @@ async def get_symbol_info(symbol: str) -> dict:
 
 # ====================== RUN ======================
 
+def _monitor_status() -> dict:
+    try:
+        import monitor_worker
+        status = dict(monitor_worker.STATUS)
+        status["running"] = status.get("started_at") is not None
+        return status
+    except Exception as exc:  # monitor not installed/running
+        return {"running": False, "error": str(exc)}
+
+
+@mcp.custom_route("/status", methods=["GET"])
+async def status_route(request: Request):
+    from starlette.responses import JSONResponse
+    return JSONResponse(_monitor_status())
+
+
+@mcp.tool()
+async def monitor_status() -> dict:
+    """Latest results from the in-process candle-behaviour strategy monitor: per-symbol verdict
+    and why no trade, where evaluations stop (stage tally), and any candidates found."""
+    return _monitor_status()
+
+
 def _start_monitor_thread() -> None:
     """Run the optional strategy monitor inside this process (single free Render service)."""
     import asyncio

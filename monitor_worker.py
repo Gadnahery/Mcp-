@@ -58,6 +58,23 @@ async def run() -> None:
     if not settings.alerts_enabled:
         logger.warning("STRATEGY_ALERTS_ENABLED=false: monitoring data, but sending no setup alerts")
 
+    async def notify(text: str) -> None:
+        if settings.telegram_enabled:
+            try:
+                await send_telegram(settings.telegram_bot_token, settings.telegram_chat_id, text)
+            except Exception:
+                logger.exception("Telegram status message failed")
+
+    heartbeat_hours = float(os.getenv("HEARTBEAT_HOURS", "24"))
+    stats = {"cycles": 0, "scanned": 0, "stale": 0, "errors": 0, "candidates": 0}
+    last_heartbeat = time.monotonic()
+    await notify(
+        "✅ Candle-behaviour monitor online\n"
+        f"Symbols: {', '.join(settings.symbols)}\n"
+        f"Setup alerts: {'ON' if settings.alerts_enabled else 'OFF (test mode)'}\n"
+        "Research-only; places no orders."
+    )
+
     while True:
         started = time.monotonic()
         for symbol in settings.symbols:
@@ -79,7 +96,9 @@ async def run() -> None:
                         stale.append(timeframe)
                 if stale:
                     logger.warning("%s: stale/incomplete data on %s; skipping", symbol, ",".join(stale))
+                    stats["stale"] += 1
                     continue
+                stats["scanned"] += 1
 
                 candidate = detect_candidate(
                     symbol, data["15m"], data["5m"]
@@ -91,6 +110,7 @@ async def run() -> None:
                 if key in state["sent"]:
                     logger.info("%s: duplicate candidate suppressed", symbol)
                     continue
+                stats["candidates"] += 1
                 logger.warning("%s: candidate found; RR=1:%.1f", symbol, candidate.risk_reward)
                 if settings.alerts_enabled and settings.telegram_enabled:
                     await send_telegram(
@@ -109,7 +129,17 @@ async def run() -> None:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                stats["errors"] += 1
                 logger.exception("%s: monitoring cycle failed; will retry next cycle", symbol)
+        stats["cycles"] += 1
+        if heartbeat_hours > 0 and time.monotonic() - last_heartbeat >= heartbeat_hours * 3600:
+            await notify(
+                f"💓 Monitor alive — {stats['cycles']} cycles, {stats['scanned']} symbol scans, "
+                f"{stats['stale']} skipped (closed/stale), {stats['errors']} errors, "
+                f"{stats['candidates']} candidates since last heartbeat."
+            )
+            stats.update(cycles=0, scanned=0, stale=0, errors=0, candidates=0)
+            last_heartbeat = time.monotonic()
         elapsed = time.monotonic() - started
         await asyncio.sleep(max(1, settings.poll_seconds - elapsed))
 

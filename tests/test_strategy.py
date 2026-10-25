@@ -59,7 +59,7 @@ class StrategyTests(unittest.TestCase):
         # Data without clear higher-timeframe close-to-close dominance cannot pass context.
         closes = [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11]
         data = candles_from_closes(closes)
-        self.assertIsNone(detect_candidate("TEST", data, data, data))
+        self.assertIsNone(detect_candidate("TEST", data, data))
 
 
 if __name__ == "__main__":

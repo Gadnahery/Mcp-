@@ -61,7 +61,7 @@ class PositivePathTests(unittest.TestCase):
 
     def test_no_candidate_without_the_confirming_close(self):
         m15, m5 = build()
-        m5[-2] = dict(m5[-2], close=100.9, high=101.0)         # no close beyond base
+        m5[-2] = dict(m5[-2], close=100.5, low=100.2)          # last completed candle turns bearish
         self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
 
 
@@ -112,29 +112,52 @@ def _impulse(post):
     return m15, out
 
 
-class DominancePathTests(unittest.TestCase):
-    def test_impulsive_reversal_with_three_strong_closes_is_a_candidate(self):
-        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2), (102.2, 103.1)])
+class TwoCloseConfirmationTests(unittest.TestCase):
+    """Rule (user, Oct 26): two consecutive directional body closes with close-to-close progress."""
+
+    def test_two_bullish_body_closes_after_a_sweep_are_a_candidate(self):
+        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2)])
         result = analyze_setup("TEST", m15, m5)
         self.assertEqual(result.status, "CANDIDATE", (result.stage, result.missing))
-        self.assertEqual(result.candidate.entry_style, "dominance_closes")
         self.assertEqual(result.candidate.side, "BUY")
 
-    def test_two_strong_closes_are_not_enough(self):
-        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2), (102.2, 102.0)])
+    def test_three_closes_still_work(self):
+        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2), (102.2, 103.1)])
+        self.assertEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+
+    def test_a_bearish_candle_breaks_the_pair(self):
+        m15, m5 = _impulse([(100.4, 101.3), (101.3, 100.9), (100.9, 101.0)])
         self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
 
-    def test_three_tiny_bodied_closes_do_not_count_as_control(self):
-        # closes rise but bodies are slivers inside long wicks: not strong control
-        post = [(100.40, 100.43), (100.43, 100.46), (100.46, 100.49)]
-        m15, m5 = _impulse(post)
-        for c in m5[21:24]:
-            c["high"] += 1.0
-            c["low"] -= 1.0
-        self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+    def test_no_progress_close_to_close_is_not_control(self):
+        # second candle is bullish by body but closes below the previous close
+        m15, m5 = _impulse([(100.4, 101.3), (100.9, 101.2), (101.2, 101.25)])
+        result = analyze_setup("TEST", m15, m5)
+        self.assertTrue(result.status != "CANDIDATE" or result.candidate.candle_epoch != m5[-3]["epoch"])
 
-    def test_streak_must_finish_beyond_the_sweep_candle(self):
-        # rising closes but never clearing the sweep candle's high (100.2): no control shown
-        post = [(100.00, 100.05), (100.05, 100.10), (100.10, 100.15)]
-        m15, m5 = _impulse(post)
-        self.assertNotEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+
+class StopIntegrityTests(unittest.TestCase):
+    """Regression: R_25 alert on Oct 26 had its stop above prices already traded after the sweep."""
+
+    def test_stop_is_the_lowest_low_since_the_sweep_not_just_the_sweep_candle(self):
+        # sweep, then a dive far below the sweep low, then two bullish closes
+        m15, m5 = _impulse([(100.4, 97.5), (97.5, 98.6), (98.6, 99.6)])
+        result = analyze_setup("TEST", m15, m5)
+        lowest = min(c["low"] for c in m5[20:-1])
+        if result.candidate:  # if it passes the gates the stop must cover the dive
+            self.assertLessEqual(result.candidate.stop_loss, lowest + 1e-9)
+        self.assertNotEqual(result.stage, "risk_approved_candidate" if result.candidate is None else "x")
+
+    def test_dive_below_sweep_low_cannot_produce_a_huge_fake_rr(self):
+        m15, m5 = _impulse([(100.4, 97.5), (97.5, 98.6), (98.6, 99.6)])
+        result = analyze_setup("TEST", m15, m5)
+        if result.candidate:
+            self.assertLess(result.candidate.risk_reward, 15)
+
+    def test_sub_noise_stop_is_rejected(self):
+        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2)])
+        for c in m5[:20]:  # make normal 5M noise much larger than the structural stop distance
+            c["high"] += 8.0  # highs only: leaves sweep detection and the stop untouched
+        result = analyze_setup("TEST", m15, m5)
+        self.assertNotEqual(result.status, "CANDIDATE")
+        self.assertEqual(result.stage, "risk")

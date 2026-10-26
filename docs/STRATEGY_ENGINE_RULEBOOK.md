@@ -228,3 +228,14 @@ before relying on alerts.
 - Structural stop is anchored to the sweep candle extreme: sweep low for BUY, sweep high for SELL.
 - The meaningful 15M target and minimum 1:3 planned R:R gates remain.
 - This change is experimental. Run tests and replay the annotated EURUSD/GBPUSD examples before enabling alerts; no profitability claim is made.
+
+## Update 2026-10-26 (2) — stop integrity fix after a bad R_25 alert
+
+Alert: R_25 BUY entry 2745.77, SL 2745.636, RR 1:46.5. Price had already traded to 2741.91 (3.7 pts below that
+"stop") between the sweep and the confirmation, then sold off immediately. Cause: stop anchored to the sweep
+candle's low only. Fixes:
+- **Stop = sweep extreme, widened to the lowest low / highest high actually reached from the sweep to the
+  confirmation.** Identical to the sweep-candle anchor whenever price did not trade beyond it.
+- **Minimum risk:** a stop closer than 0.5 x median 5M range is inside normal noise and is rejected (stage `risk`).
+- Sweeps with exactly two completed candles after them are now evaluated (needed by the two-close rule).
+- Tests updated to the two-close rule (Oct 26 simplification) and regression tests added for the above.

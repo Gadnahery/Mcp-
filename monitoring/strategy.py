@@ -44,6 +44,8 @@ TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
 PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
 MIN_RR = 3.0
+# A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
+MIN_RISK_MULT = 0.5
 # Assumed all-in spread in price units, used to shrink reward and widen risk. These are
 # starting estimates, not measured Deriv values: override with ASSUMED_SPREADS="frxEURUSD=0.00012,...".
 _DEFAULT_SPREADS = {"frxEURUSD": 0.00012, "frxGBPUSD": 0.00015, "frxXAUUSD": 0.35, "cryBTCUSD": 15.0}
@@ -330,7 +332,7 @@ def analyze_setup(
     max_depth = median(recent_15m_ranges) * SWEEP_MAX_DEPTH_MULT
     possible: list[tuple[int, Side, dict[str, Any], float]] = []
     first = max(8, len(m5) - 1 - SWEEP_LOOKBACK)
-    for i in range(first, len(m5) - 3):  # need at least 3 completed candles after the sweep
+    for i in range(first, len(m5) - 2):  # need at least 2 completed candles after the sweep (the two-close rule)
         candle = m5[i]
         low, high, close = float(candle["low"]), float(candle["high"]), float(candle["close"])
         swept_lows = [lv for lv in ref_lows if low < lv <= low + max_depth and close > lv]
@@ -399,13 +401,15 @@ def analyze_setup(
     if target_mode != "nearest":
         pool = [a for a in pool if a["significant"]]
     if side == "BUY":
-        stop = float(sweep["low"])
+        # Anchor to the sweep candle, but if price later traded beyond it before confirmation the real
+        # invalidation is that lower extreme (otherwise the stop sits inside price that already happened).
+        stop = min(float(sweep["low"]), min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1]))
         ahead = [a for a in pool if a["level"] > entry]
         target_area = min(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["high"])
         retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:])
     else:
-        stop = float(sweep["high"])
+        stop = max(float(sweep["high"]), max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1]))
         ahead = [a for a in pool if a["level"] < entry]
         target_area = max(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["low"])
@@ -413,6 +417,10 @@ def analyze_setup(
     risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + ["Structural stop does not produce positive risk"]))
+    ranges_5m = [float(c["high"]) - float(c["low"]) for c in m5[-30:]]
+    min_risk = median(ranges_5m) * MIN_RISK_MULT if ranges_5m else 0.0
+    if risk < min_risk:
+        return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + [f"Stop is only {risk:g} away, inside normal 5M noise (minimum {min_risk:g} = {MIN_RISK_MULT:g}x median 5M range); R:R would be meaningless"]), None, {"confirm_epoch": int(confirm["epoch"]), "risk": risk, "min_risk": min_risk})
     if target_area is None:
         kind = "significant 15M reaction area" if target_mode != "nearest" else "15M reaction reference"
         return Analysis(symbol, "NO_TRADE", side, "target", tuple(evidence), tuple(missing + [f"No {kind} ahead in the trade direction"]), None, {"confirm_epoch": int(confirm["epoch"]), "no_target": True})

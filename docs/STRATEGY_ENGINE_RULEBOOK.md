@@ -51,7 +51,7 @@ The 1H and 1M timeframes are intentionally **not used** by the strategy engine. 
 ### Gate D — Sweep and reclaim
 - BUY candidate context: price trades below a detected 15M swing low and the same 5M candle closes back above that reference.
 - SELL candidate context: price trades above a detected 15M swing high and the same 5M candle closes back below that reference.
-- The current detector searches only a recent subset of the 5M candles for a qualifying sweep.
+- The detector searches recent 5M candles and now leaves only the two candles needed for the new confirmation rule; recent valid sweeps are not discarded merely because they lack an old three-candle reaction window.
 - A sweep alone never produces a candidate.
 
 ### Gate E — Post-sweep reaction and control confirmation

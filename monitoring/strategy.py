@@ -88,6 +88,34 @@ def _dominance(candles: list[dict[str, Any]], n: int = 3) -> str | None:
     return None
 
 
+def _directional_confirmation(candles: list[dict[str, Any]], side: Side) -> tuple[int, int] | None:
+    """Return (index, consecutive_count) for 2-3 directional body closes.
+
+    Two consecutive candles must have bodies in the proposed direction and
+    successive closes must progress in that direction. A matching third candle
+    strengthens the signal but is optional.
+    """
+    for i in range(1, len(candles)):
+        prev, current = candles[i - 1], candles[i]
+        po, pc = float(prev["open"]), float(prev["close"])
+        co, cc = float(current["open"]), float(current["close"])
+        if side == "SELL":
+            valid = pc < po and cc < co and cc < pc
+        else:
+            valid = pc > po and cc > co and cc > pc
+        if not valid:
+            continue
+        if i + 1 < len(candles):
+            third = candles[i + 1]
+            to, tc = float(third["open"]), float(third["close"])
+            if side == "SELL" and tc < to and tc < cc:
+                return i + 1, 3
+            if side == "BUY" and tc > to and tc > cc:
+                return i + 1, 3
+        return i, 2
+    return None
+
+
 def _swing_levels(candles: list[dict[str, Any]], wing: int = 2) -> tuple[list[float], list[float]]:
     """Return confirmed local swing highs/lows. Wing=2 is a provisional coding proxy."""
     highs: list[float] = []
@@ -227,38 +255,14 @@ def analyze_setup(
     if len(after_sweep) < 2:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Need at least two completed candles after the sweep to confirm control",))
 
-    # Simplified user rule: after a sweep/rejection, require two consecutive
-    # decisive body closes in the trade direction with close-to-close progress.
-    # A third matching candle strengthens the evidence but is not mandatory.
-    # No extra compact/alternating base or full reaction-range breakout is required.
-    confirm: dict[str, Any] | None = None
-    confirm_index_local: int | None = None
-    for j in range(1, len(after_sweep)):
-        prev, current = after_sweep[j - 1], after_sweep[j]
-        prev_o, prev_c = float(prev["open"]), float(prev["close"])
-        curr_o, curr_c = float(current["open"]), float(current["close"])
-        if side == "SELL":
-            valid_pair = prev_c < prev_o and curr_c < curr_o and curr_c < prev_c
-        else:
-            valid_pair = prev_c > prev_o and curr_c > curr_o and curr_c > prev_c
-        if valid_pair:
-            confirm, confirm_index_local = current, j
-            break
-    if confirm is None or confirm_index_local is None:
+    # Simplified user rule: two decisive directional body closes; a third strengthens it.
+    confirmation = _directional_confirmation(after_sweep, side)
+    if confirmation is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))
-
-    third = after_sweep[confirm_index_local + 1] if confirm_index_local + 1 < len(after_sweep) else None
-    if third is not None:
-        o3, c3 = float(third["open"]), float(third["close"])
-        c2 = float(confirm["close"])
-        if side == "SELL" and c3 < o3 and c3 < c2:
-            confirm = third
-            evidence.append("Three consecutive bearish body closes with lower closes confirmed seller control")
-        elif side == "BUY" and c3 > o3 and c3 > c2:
-            confirm = third
-            evidence.append("Three consecutive bullish body closes with higher closes confirmed buyer control")
-        else:
-            evidence.append("Two consecutive directional body closes with close-to-close progress confirmed control")
+    confirm_index_local, count = confirmation
+    confirm = after_sweep[confirm_index_local]
+    if count == 3:
+        evidence.append(f"Three consecutive {'bearish' if side == 'SELL' else 'bullish'} body closes with directional close-to-close progress confirmed control")
     else:
         evidence.append("Two consecutive directional body closes with close-to-close progress confirmed control")
     evidence.append(f"Control confirmation close at {float(confirm['close']):.5f}; entry is assessed at that close")

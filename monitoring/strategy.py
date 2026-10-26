@@ -42,7 +42,7 @@ SIG_REACTION_LOOKAHEAD = 4
 TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
-PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
+PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "false").lower() == "true"
 MIN_RR = 3.0
 # A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
 MIN_RISK_MULT = 0.5
@@ -271,8 +271,8 @@ def analyze_setup(
 ) -> Analysis:
     """Evaluate the setup using 15M context, 5M structure, optional 1M for tighter entries.
 
-    1M is used only to refine the retest/limit entry after 5M confirmation so planned R:R
-    can clear the minimum more often without loosening structure rules.
+    1M is further analysis only after 5M confirmation: check that the confirmation leg is clean/concise on a finer timeframe.
+    One-way market entry at the confirming close only — no limit, no retest wait, no pullback.
 
     ``opts``: target_mode, pullback, min_rr, spread.
     """
@@ -404,6 +404,33 @@ def analyze_setup(
     # is deliberately not fabricated: the notes say timing is context-dependent and
     # the exact pullback decision rules are still open.
     entry = float(confirm["close"])
+    # 1M further analysis (not an entry style): is the confirmation leg clean on a finer timeframe?
+    if m1:
+        confirm_epoch = int(confirm["epoch"])
+        # 1M candles covering the confirming 5M bar + a few after
+        leg = [c for c in m1 if confirm_epoch - 60 <= int(c["epoch"]) <= confirm_epoch + 5 * 60]
+        if len(leg) >= 5:
+            m1_dom = _dominance(leg, min(3, len(leg) - 1))
+            if m1_dom:
+                evidence.append(f"1M further analysis: close-to-close dominance on confirmation leg = {m1_dom}")
+            else:
+                evidence.append("1M further analysis: confirmation leg dominance mixed/unclear on finer timeframe")
+            # Concise structure check: opposing dominance on 1M after a 5M confirm weakens the one-way idea
+            if side == "BUY" and m1_dom == "bearish":
+                return Analysis(
+                    symbol, "NO_TRADE", side, "m1_conflict", tuple(evidence),
+                    ("1M further analysis: confirmation leg shows opposing bearish dominance; setup not concise enough",),
+                )
+            if side == "SELL" and m1_dom == "bullish":
+                return Analysis(
+                    symbol, "NO_TRADE", side, "m1_conflict", tuple(evidence),
+                    ("1M further analysis: confirmation leg shows opposing bullish dominance; setup not concise enough",),
+                )
+            # Range context for R:R realism notes only (does not change one-way entry)
+            m1_ranges = [float(c["high"]) - float(c["low"]) for c in leg]
+            if m1_ranges:
+                from statistics import median as _med
+                evidence.append(f"1M further analysis: median range on confirmation leg {_med(m1_ranges):.5f} (context only)")
     spread = float(opts.get("spread", ASSUMED_SPREADS.get(symbol, 0.0)))
     pool = areas_high if side == "BUY" else areas_low
     if target_mode != "nearest":
@@ -415,35 +442,13 @@ def analyze_setup(
         ahead = [a for a in pool if a["level"] > entry]
         target_area = min(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["high"])
-        post5 = m5[confirm_index + 1:]
-        retest_filled = any(float(c["low"]) <= retest for c in post5)
-        if m1:
-            confirm_epoch = int(confirm["epoch"])
-            post1 = [c for c in m1 if int(c["epoch"]) >= confirm_epoch]
-            retest_filled = retest_filled or any(float(c["low"]) <= retest for c in post1)
-            # Tighter BUY limit: deepest 1M pullback still above stop and below market entry
-            micros = [float(c["low"]) for c in post1
-                      if stop < float(c["low"]) < float(entry)]
-            if micros:
-                retest = min(micros)  # deepest pullback improves R:R
-                evidence.append(f"1M refined BUY retest level to {retest:.5f}")
+        retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:])
     else:
         stop = max(float(sweep["high"]), max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1]))
         ahead = [a for a in pool if a["level"] < entry]
         target_area = max(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["low"])
-        post5 = m5[confirm_index + 1:]
-        retest_filled = any(float(c["high"]) >= retest for c in post5)
-        if m1:
-            confirm_epoch = int(confirm["epoch"])
-            post1 = [c for c in m1 if int(c["epoch"]) >= confirm_epoch]
-            retest_filled = retest_filled or any(float(c["high"]) >= retest for c in post1)
-            # Tighter SELL limit: highest 1M bounce still below stop and above market entry
-            micros = [float(c["high"]) for c in post1
-                      if float(entry) < float(c["high"]) < stop]
-            if micros:
-                retest = max(micros)
-                evidence.append(f"1M refined SELL retest level to {retest:.5f}")
+        retest_filled = any(float(c["high"]) >= retest for c in m5[confirm_index + 1:])
     risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + ["Structural stop does not produce positive risk"]))
@@ -455,7 +460,7 @@ def analyze_setup(
         kind = "significant 15M reaction area" if target_mode != "nearest" else "15M reaction reference"
         return Analysis(symbol, "NO_TRADE", side, "target", tuple(evidence), tuple(missing + [f"No {kind} ahead in the trade direction"]), None, {"confirm_epoch": int(confirm["epoch"]), "no_target": True})
     target = float(target_area["level"])
-    plan = _plan_entry(side, entry, stop, target, retest, retest_filled, spread, min_rr, pullback_on)
+    plan = _plan_entry(side, entry, stop, target, retest, retest_filled, spread, min_rr, False)  # one-way only: no limit/retest wait
     if plan["style"] is None:
         msg = f"Next reaction area offers only 1:{plan['rr_market']:.2f} at the confirming close (net of assumed spread {spread:g}); minimum is 1:{min_rr:g}"
         if plan["rr_pullback"] is not None:

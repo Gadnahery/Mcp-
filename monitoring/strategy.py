@@ -42,7 +42,7 @@ SIG_REACTION_LOOKAHEAD = 4
 TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
-PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "false").lower() == "true"
+PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
 MIN_RR = 3.0
 # A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
 MIN_RISK_MULT = 0.5
@@ -266,17 +266,23 @@ def analyze_setup(
     symbol: str,
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
+    candles_1m: list[dict[str, Any]] | None = None,
     opts: dict[str, Any] | None = None,
 ) -> Analysis:
-    """Evaluate the setup using 15M context and 5M execution candles.
+    """Evaluate the setup using 15M context, 5M structure, optional 1M for tighter entries.
 
-    ``opts`` (diagnostics only; live monitor passes None): target_mode, pullback, min_rr, spread.
+    1M is used only to refine the retest/limit entry after 5M confirmation so planned R:R
+    can clear the minimum more often without loosening structure rules.
+
+    ``opts``: target_mode, pullback, min_rr, spread.
     """
     opts = opts or {}
     target_mode = str(opts.get("target_mode", TARGET_MODE))
     pullback_on = bool(opts.get("pullback", PULLBACK_ENABLED))
     min_rr = float(opts.get("min_rr", MIN_RR))
     raw = {"15M": candles_15m, "5M": candles_5m}
+    if candles_1m:
+        raw["1M"] = candles_1m
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     evidence: list[str] = []
     missing: list[str] = []
@@ -292,6 +298,7 @@ def analyze_setup(
     for tf in data:
         data[tf] = data[tf][:-1]
     m15, m5 = data["15M"], data["5M"]
+    m1 = data.get("1M") or []
 
     m15_dom = _dominance(m15, 3)
     if m15_dom:
@@ -408,13 +415,35 @@ def analyze_setup(
         ahead = [a for a in pool if a["level"] > entry]
         target_area = min(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["high"])
-        retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:])
+        post5 = m5[confirm_index + 1:]
+        retest_filled = any(float(c["low"]) <= retest for c in post5)
+        if m1:
+            confirm_epoch = int(confirm["epoch"])
+            post1 = [c for c in m1 if int(c["epoch"]) >= confirm_epoch]
+            retest_filled = retest_filled or any(float(c["low"]) <= retest for c in post1)
+            # Tighter BUY limit: deepest 1M pullback still above stop and below market entry
+            micros = [float(c["low"]) for c in post1
+                      if stop < float(c["low"]) < float(entry)]
+            if micros:
+                retest = min(micros)  # deepest pullback improves R:R
+                evidence.append(f"1M refined BUY retest level to {retest:.5f}")
     else:
         stop = max(float(sweep["high"]), max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1]))
         ahead = [a for a in pool if a["level"] < entry]
         target_area = max(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["low"])
-        retest_filled = any(float(c["high"]) >= retest for c in m5[confirm_index + 1:])
+        post5 = m5[confirm_index + 1:]
+        retest_filled = any(float(c["high"]) >= retest for c in post5)
+        if m1:
+            confirm_epoch = int(confirm["epoch"])
+            post1 = [c for c in m1 if int(c["epoch"]) >= confirm_epoch]
+            retest_filled = retest_filled or any(float(c["high"]) >= retest for c in post1)
+            # Tighter SELL limit: highest 1M bounce still below stop and above market entry
+            micros = [float(c["high"]) for c in post1
+                      if float(entry) < float(c["high"]) < stop]
+            if micros:
+                retest = max(micros)
+                evidence.append(f"1M refined SELL retest level to {retest:.5f}")
     risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + ["Structural stop does not produce positive risk"]))

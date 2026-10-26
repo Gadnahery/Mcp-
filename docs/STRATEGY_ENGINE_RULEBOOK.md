@@ -56,14 +56,14 @@ The 1H and 1M timeframes are intentionally **not used** by the strategy engine. 
 
 ### Gate E — Post-sweep reaction and control confirmation
 - Require enough candles before and after the sweep to inspect the reaction.
-- The current code uses a compact/alternating candle-cluster heuristic as a proxy for indecision/base. This is provisional.
-- After the reaction range is defined, require a later completed 5M close beyond that range in the proposed trade direction.
-- A zone touch, wick, or sweep without the later close is not confirmation.
-- Current automated entry is the confirmation candle's close. Pullback entry is not implemented because its exact rules remain unresolved.
+- The simplified confirmation rule now requires **two consecutive completed 5M candles** with bodies in the trade direction and close-to-close progress after the sweep/rejection.
+- A third matching candle is used when present to strengthen confirmation; it is not mandatory.
+- The engine no longer requires an extra compact/alternating base or a later close beyond the entire three-candle reaction range.
+- Current automated entry is the final confirmation candle's close. Pullback-limit entry remains a separate optional execution style and is not yet implemented in the live candidate engine.
 
 ### Gate F — Invalidation, target and reward-to-risk
-- BUY stop: lowest low from the sweep through confirmation.
-- SELL stop: highest high from the sweep through confirmation.
+- BUY stop: sweep candle's low (the low that performed the sweep).
+- SELL stop: sweep candle's high (the high that performed the sweep).
 - Target: nearest detected 15M swing reference in the trade direction beyond entry.
 - Risk and reward must both be positive.
 - Planned reward-to-risk must be at least 3.0; otherwise return **NO_TRADE**.
@@ -146,8 +146,9 @@ Suggested metrics: number of trades, win rate, average win/loss in R, expectancy
 | Unclear 15M is not automatically an opposing filter | Implemented and unit-tested |
 | Swing references | Implemented as provisional two-candle-wing proxy |
 | Sweep-and-reclaim at a detected reference | Implemented, needs annotated replay |
-| Post-sweep base/reaction | Implemented as provisional heuristic |
-| Close beyond reaction range | Implemented |
+| Post-sweep compact/alternating base requirement | Removed from signal gate |
+| Two consecutive directional body closes with close-to-close progress | Implemented |
+| Optional third matching close strengthens confirmation | Implemented |
 | Structural stop and nearest detected 15M swing target | Implemented |
 | Minimum planned 1:3 R:R | Implemented before costs |
 | User-annotated short replay helper | Implemented for research, not live signals |
@@ -183,3 +184,11 @@ The validation approach follows standard backtesting cautions: use explicit rule
   which is the conservative failure mode. Use `replay.py` to measure rejection by gate before changing it.
 - **Tooling:** `replay.py` (candle-by-candle replay with gate tally and outcomes) and `scripts/fetch_history.py`.
 - Still not established: profitability, out-of-sample results, spread/slippage-aware R:R.
+
+
+## Update 2026-10-26 — simplified confirmation
+- Removed the compact/alternating base gate and the requirement to close beyond the full reaction range.
+- After a qualifying sweep-and-rejection, confirmation is two consecutive directional body closes with progress in consecutive closing prices; a third matching close strengthens the evidence.
+- Structural stop is anchored to the sweep candle's extreme, as requested.
+- The 1:3 target gate, 15M target reference, completed-candle exclusion, freshness gate and disabled-by-default alerts remain.
+- This is a code change, not evidence of profitability. Run unit tests and replay the annotated EURUSD/GBPUSD cases before enabling live alerts.

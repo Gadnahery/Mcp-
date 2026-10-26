@@ -43,6 +43,7 @@ def run_replay(
     symbol: str,
     m15: list[dict[str, Any]],
     m5: list[dict[str, Any]],
+    m1: list[dict[str, Any]] | None = None,
     warmup: int = 60,
     opts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -66,7 +67,8 @@ def run_replay(
         now_epoch = int(m5[idx]["epoch"]) + 300  # this 5M candle just closed
         view5 = [c for c in m5[: idx + 2] if int(c["epoch"]) <= now_epoch]
         view15 = [c for c in m15 if int(c["epoch"]) <= now_epoch]
-        result = analyze_setup(symbol, view15, view5, opts)
+        view1 = [c for c in (m1 or []) if int(c["epoch"]) <= now_epoch] or None
+        result = analyze_setup(symbol, view15, view5, view1, opts)
         stage_key = "CANDIDATE" if result.status == "CANDIDATE" else result.stage
         tally[stage_key] += 1
         last_analysis = {

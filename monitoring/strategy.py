@@ -358,42 +358,33 @@ def analyze_setup(
     if sweep_index is None or sweep_index < 8 or sweep_index + 1 >= len(m5):
         return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Insufficient candles before/after sweep to assess the reaction",))
 
-    before_cluster = m5[max(0, sweep_index - 3):sweep_index]
     after_sweep = m5[sweep_index + 1:]
     if len(after_sweep) < 2:
-        return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Need completed candles after the sweep to assess rejection/indecision and the response",))
+        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Need at least two completed candles after the sweep to confirm control",))
 
-    # The strategy notes describe indecision/rejection AFTER the false sweep.
-    # This detector is still a proxy: it looks for a compact/alternating reaction
-    # after the sweep, then requires a later close beyond that reaction's range.
-    base, base_note = _indecision_or_base(before_cluster + [sweep] + after_sweep[:3], count=3)
-    evidence.append(base_note)
-
+    # User rule: confirm control with two consecutive directional body closes
+    # and close-to-close progress. A third matching close strengthens the signal.
     confirm: dict[str, Any] | None = None
-    path = ""
-    reaction_high = reaction_low = None
-    if base:
-        reaction = after_sweep[:3]
-        reaction_high = max(float(c["high"]) for c in reaction)
-        reaction_low = min(float(c["low"]) for c in reaction)
-        for c in after_sweep[3:]:
-            if side == "BUY" and float(c["close"]) > reaction_high:
-                confirm, path = c, "base_break"
-                break
-            if side == "SELL" and float(c["close"]) < reaction_low:
-                confirm, path = c, "base_break"
-                break
-    dom = _dominance_confirm(side, sweep, after_sweep)
-    if dom is not None and (confirm is None or int(dom["epoch"]) < int(confirm["epoch"])):
-        confirm, path = dom, "dominance_closes"
+    count = 0
+    for j in range(1, len(after_sweep)):
+        prev, current = after_sweep[j - 1], after_sweep[j]
+        po, pc = float(prev["open"]), float(prev["close"])
+        co, cc = float(current["open"]), float(current["close"])
+        valid = (pc < po and cc < co and cc < pc) if side == "SELL" else (pc > po and cc > co and cc > pc)
+        if not valid:
+            continue
+        confirm, count = current, 2
+        if j + 1 < len(after_sweep):
+            third = after_sweep[j + 1]
+            to, tc = float(third["open"]), float(third["close"])
+            if (side == "SELL" and tc < to and tc < cc) or (side == "BUY" and tc > to and tc > cc):
+                confirm, count = third, 3
+        break
     if confirm is None:
-        if base:
-            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No later completed close beyond the post-sweep reaction range, and no run of consecutive closes in the trade direction; sweep and indecision alone are not entry signals",))
-        return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("No base/indecision after the sweep and no run of consecutive strong closes in the trade direction yet",))
-    if path == "dominance_closes":
-        evidence.append(f"Control shown by {DOMINANCE_CLOSES} consecutive strong closes in the trade direction, finishing at {float(confirm['close']):.5f} beyond the sweep candle")
-    else:
-        evidence.append(f"Post-sweep reaction formed a possible base; later candle closed beyond its range at {float(confirm['close']):.5f}")
+        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))
+    path = "dominance_closes"
+    reaction_high = reaction_low = None
+    evidence.append(f"{count} consecutive {'bearish' if side == 'SELL' else 'bullish'} body closes with directional close-to-close progress confirmed control; final close {float(confirm['close']):.5f}")
     confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
     if confirm_index is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate confirmation candle in ordered data",))
@@ -408,17 +399,17 @@ def analyze_setup(
     if target_mode != "nearest":
         pool = [a for a in pool if a["significant"]]
     if side == "BUY":
-        stop = min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1])
+        stop = float(sweep["low"])
         ahead = [a for a in pool if a["level"] > entry]
         target_area = min(ahead, key=lambda a: a["level"]) if ahead else None
-        retest = reaction_high if path == "base_break" else float(sweep["high"])
-        retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:]) if retest is not None else True
+        retest = float(sweep["high"])
+        retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:])
     else:
-        stop = max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1])
+        stop = float(sweep["high"])
         ahead = [a for a in pool if a["level"] < entry]
         target_area = max(ahead, key=lambda a: a["level"]) if ahead else None
-        retest = reaction_low if path == "base_break" else float(sweep["low"])
-        retest_filled = any(float(c["high"]) >= retest for c in m5[confirm_index + 1:]) if retest is not None else True
+        retest = float(sweep["low"])
+        retest_filled = any(float(c["high"]) >= retest for c in m5[confirm_index + 1:])
     risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + ["Structural stop does not produce positive risk"]))

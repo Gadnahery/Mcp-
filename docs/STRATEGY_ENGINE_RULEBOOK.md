@@ -220,3 +220,11 @@ before relying on alerts.
   rules are before changing anything.
 - Caveat: retest entries make R:R look better but fills are not guaranteed (and losing trades fill more often),
   so judge them by replay *outcomes*, not by planned R:R.
+
+
+## Update 2026-10-26 — simplified confirmation on main
+- Removed the compact/alternating base gate and the requirement for a later close beyond the full reaction range.
+- After a qualifying sweep/rejection, confirmation is two consecutive completed 5M candles with directional bodies and close-to-close progress. A third matching close strengthens confirmation but is optional.
+- Structural stop is anchored to the sweep candle extreme: sweep low for BUY, sweep high for SELL.
+- The meaningful 15M target and minimum 1:3 planned R:R gates remain.
+- This change is experimental. Run tests and replay the annotated EURUSD/GBPUSD examples before enabling alerts; no profitability claim is made.

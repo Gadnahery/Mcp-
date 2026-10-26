@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from types import SimpleNamespace
 from typing import Any
 
 from .strategy import analyze_setup
@@ -78,13 +79,24 @@ def run_replay(
         }
         det = result.details or {}
         if result.stage in ("risk_reward", "target") and det.get("confirm_epoch") is not None:
-            near_misses[int(det["confirm_epoch"])] = {
-                "side": result.side, "stage": result.stage,
-                "rr_market": det.get("rr_market"), "rr_pullback": det.get("rr_pullback"),
-                "touches": det.get("target_touches"),
-            }
-        if result.candidate and result.candidate.candle_epoch not in seen:
-            seen.add(result.candidate.candle_epoch)
+            nm_key = (det.get("sweep_epoch"), result.side) if det.get("sweep_epoch") else int(det["confirm_epoch"])
+            if nm_key not in near_misses:
+                entry_ = {
+                    "side": result.side, "stage": result.stage,
+                    "rr_market": det.get("rr_market"), "rr_pullback": det.get("rr_pullback"),
+                    "touches": det.get("target_touches"),
+                }
+                if det.get("entry") is not None and det.get("stop") is not None and det.get("target") is not None:
+                    pseudo = SimpleNamespace(side=result.side, entry=det["entry"], stop_loss=det["stop"],
+                                             take_profit=det["target"], risk_reward=det.get("rr_market") or 0.0,
+                                             entry_style="market")
+                    out, r_ = _simulate(pseudo, m5[idx + 1:])
+                    entry_["if_taken"] = out
+                    entry_["if_taken_r"] = r_
+                near_misses[nm_key] = entry_
+        key = (result.candidate.sweep_epoch, result.candidate.side) if result.candidate else None
+        if result.candidate and key not in seen:
+            seen.add(key)
             c = result.candidate
             outcome, r_mult = _simulate(c, m5[idx + 1 :])
             candidates.append({
@@ -122,6 +134,12 @@ def run_replay(
             "would_pass_at_2.0": sum(1 for x in near if x >= 2.0),
             "would_pass_at_2.5": sum(1 for x in near if x >= 2.5),
             "no_significant_target": sum(1 for m in near_misses.values() if m["stage"] == "target"),
+            "if_taken_at_market": {
+                "targets": sum(1 for m in near_misses.values() if m.get("if_taken") == "target"),
+                "stops": sum(1 for m in near_misses.values() if str(m.get("if_taken", "")).startswith("stop")),
+                "open": sum(1 for m in near_misses.values() if m.get("if_taken") == "open"),
+                "net_r": round(sum(m["if_taken_r"] for m in near_misses.values() if m.get("if_taken_r") is not None), 2),
+            },
         },
         "bars_evaluated": max(0, len(m5) - warmup - 1),
         "m15_count": len(m15),
@@ -160,6 +178,8 @@ def format_replay_report(result: dict[str, Any]) -> str:
         )
         lines.append(f"  best R:R seen: {nm.get('best_rr_values')}")
         lines.append(f"  would pass at 1:2.5: {nm.get('would_pass_at_2.5')} · at 1:2: {nm.get('would_pass_at_2.0')}")
+        it = nm.get("if_taken_at_market") or {}
+        lines.append(f"  if taken at market anyway (not recommended, just data): targets {it.get('targets')}, stops {it.get('stops')}, open {it.get('open')}, net {it.get('net_r')}R at their planned R:R")
     cands = result.get("candidates") or []
     lines.append("")
     if not cands:

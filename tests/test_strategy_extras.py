@@ -80,3 +80,21 @@ class OptsAndReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoPullbackByDefaultTests(unittest.TestCase):
+    def test_pullback_entries_are_off_unless_explicitly_enabled(self):
+        import monitoring.strategy as strat
+        self.assertFalse(strat.PULLBACK_ENABLED)
+        m15, m5 = build()
+        result = analyze_setup("TEST", m15, m5)
+        if result.candidate:
+            self.assertNotEqual(result.candidate.entry_style, "pullback_limit")
+
+    def test_replay_counts_one_near_miss_per_sweep_and_reports_what_if_taken(self):
+        m15, m5 = build()
+        result = run_replay("TEST", m15, m5, warmup=20, opts={"min_rr": 50.0})
+        nm = result["near_misses"]
+        self.assertEqual(nm["setups_that_failed_rr_or_target"], 1)   # same sweep seen on several bars = one setup
+        self.assertIn("if_taken_at_market", nm)
+        self.assertEqual(sum(nm["if_taken_at_market"][k] for k in ("targets", "stops", "open")) <= 1, True)

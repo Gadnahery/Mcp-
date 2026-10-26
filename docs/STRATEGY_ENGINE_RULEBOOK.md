@@ -239,3 +239,13 @@ candle's low only. Fixes:
 - **Minimum risk:** a stop closer than 0.5 x median 5M range is inside normal noise and is rejected (stage `risk`).
 - Sweeps with exactly two completed candles after them are now evaluated (needed by the two-close rule).
 - Tests updated to the two-close rule (Oct 26 simplification) and regression tests added for the above.
+
+## Update 2026-10-26 (3) — pullback entries OFF by default; honest replay counting
+
+- **Retest/pullback limit entries are disabled by default** (`PULLBACK_ENABLED=false`). They were an add-on that
+  turned a failed 1:3 into a limit order; in the R_25 replay they often never filled, and filled ones were counted
+  twice. The strategy is: enter at the confirming close, or no trade. Re-enable only to experiment.
+- **Replay counts one trade per sweep** (same sweep confirmed on several candles = one setup).
+- **Replay shows rejected setups' "what if taken at market"** so R:R minimums can be judged with data
+  instead of guesses. R_25 window (Oct 25-26): every valid setup hit its target at market entry, but at only
+  ~1:0.5 to 1:2.4 — none reached 1:3. One window is not evidence; use `/replay` on every pair and `rr2`/`rr2.5` variants.

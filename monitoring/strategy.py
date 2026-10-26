@@ -42,7 +42,7 @@ SIG_REACTION_LOOKAHEAD = 4
 TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
-PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
+PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "false").lower() == "true"
 MIN_RR = 3.0
 # A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
 MIN_RISK_MULT = 0.5
@@ -82,6 +82,7 @@ class Candidate:
     invalidation: str
     evidence: tuple[str, ...] = field(default_factory=tuple)
     entry_style: str = "decisive_close"
+    sweep_epoch: int = 0
     target_reference: str = "next detected reaction area"
 
 
@@ -430,7 +431,7 @@ def analyze_setup(
         msg = f"Next reaction area offers only 1:{plan['rr_market']:.2f} at the confirming close (net of assumed spread {spread:g}); minimum is 1:{min_rr:g}"
         if plan["rr_pullback"] is not None:
             msg += f"; a retest entry would offer 1:{plan['rr_pullback']:.2f}"
-        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"]})
+        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "side": side, "entry": entry, "stop": stop, "target": target, "sweep_epoch": int(sweep["epoch"]), "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"]})
     style = ("pullback_limit" if plan["style"] == "pullback_limit"
              else ("dominance_closes" if path == "dominance_closes" else "decisive_close"))
     final_entry = float(plan["entry"])
@@ -459,6 +460,7 @@ def analyze_setup(
         invalidation=invalidation,
         evidence=tuple(evidence),
         entry_style=style,
+        sweep_epoch=int(sweep["epoch"]),
         target_reference=("nearest significant 15M reaction area in trade direction" if target_mode != "nearest" else "nearest detected 15M swing in trade direction"),
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)

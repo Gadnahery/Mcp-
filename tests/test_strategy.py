@@ -1,6 +1,6 @@
 import unittest
 
-from monitoring.strategy import _dominance, analyze_setup, detect_candidate
+from monitoring.strategy import _directional_confirmation, _dominance, analyze_setup, detect_candidate
 
 
 def candles_from_closes(closes, spread=0.5, start=1_700_000_000, step=60):
@@ -26,6 +26,28 @@ class StrategyTests(unittest.TestCase):
             {"epoch": 4, "open": 14, "high": 15, "low": 12, "close": 14},
         ]
         self.assertEqual(_dominance(candles, 3), "bullish")
+
+    def test_two_bearish_body_closes_confirm_sell_control(self):
+        candles = [
+            {"open": 1.3376, "close": 1.3375, "high": 1.3377, "low": 1.3374, "epoch": 1},
+            {"open": 1.3375, "close": 1.3373, "high": 1.3376, "low": 1.3372, "epoch": 2},
+        ]
+        self.assertEqual(_directional_confirmation(candles, "SELL"), (1, 2))
+
+    def test_three_bullish_body_closes_strengthen_buy_control(self):
+        candles = [
+            {"open": 1.1200, "close": 1.1201, "high": 1.1202, "low": 1.1199, "epoch": 1},
+            {"open": 1.1201, "close": 1.1203, "high": 1.1204, "low": 1.1200, "epoch": 2},
+            {"open": 1.1203, "close": 1.1205, "high": 1.1206, "low": 1.1202, "epoch": 3},
+        ]
+        self.assertEqual(_directional_confirmation(candles, "BUY"), (2, 3))
+
+    def test_same_colour_without_progress_does_not_confirm(self):
+        candles = [
+            {"open": 1.10, "close": 1.09, "high": 1.11, "low": 1.08, "epoch": 1},
+            {"open": 1.09, "close": 1.095, "high": 1.10, "low": 1.08, "epoch": 2},
+        ]
+        self.assertIsNone(_directional_confirmation(candles, "SELL"))
 
     def test_no_signal_when_timeframe_data_is_missing(self):
         self.assertIsNone(detect_candidate("TEST", [], []))

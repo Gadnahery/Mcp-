@@ -223,7 +223,7 @@ def analyze_setup(
     max_depth = median(recent_15m_ranges) * SWEEP_MAX_DEPTH_MULT
     possible: list[tuple[int, Side, dict[str, Any], float]] = []
     first = max(8, len(m5) - 1 - SWEEP_LOOKBACK)
-    for i in range(first, len(m5) - 4):  # need 3 reaction candles + a later confirming close
+    for i in range(first, len(m5) - 2):  # leave at least two completed candles for confirmation
         candle = m5[i]
         low, high, close = float(candle["low"]), float(candle["high"]), float(candle["close"])
         swept_lows = [lv for lv in ref_lows if low < lv <= low + max_depth and close > lv]

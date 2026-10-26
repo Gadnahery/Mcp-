@@ -223,33 +223,45 @@ def analyze_setup(
     if sweep_index is None or sweep_index < 8 or sweep_index + 1 >= len(m5):
         return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Insufficient candles before/after sweep to assess the reaction",))
 
-    before_cluster = m5[max(0, sweep_index - 3):sweep_index]
     after_sweep = m5[sweep_index + 1:]
     if len(after_sweep) < 2:
-        return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Need completed candles after the sweep to assess rejection/indecision and the response",))
+        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Need at least two completed candles after the sweep to confirm control",))
 
-    # The strategy notes describe indecision/rejection AFTER the false sweep.
-    # This detector is still a proxy: it looks for a compact/alternating reaction
-    # after the sweep, then requires a later close beyond that reaction's range.
-    base, base_note = _indecision_or_base(before_cluster + [sweep] + after_sweep[:3], count=3)
-    evidence.append(base_note)
-    if not base:
-        return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("No clear post-sweep indecision/base detected by the provisional heuristic; inspect rejection manually",))
-
-    reaction = after_sweep[:3]
-    reaction_high = max(float(c["high"]) for c in reaction)
-    reaction_low = min(float(c["low"]) for c in reaction)
+    # Simplified user rule: after a sweep/rejection, require two consecutive
+    # decisive body closes in the trade direction with close-to-close progress.
+    # A third matching candle strengthens the evidence but is not mandatory.
+    # No extra compact/alternating base or full reaction-range breakout is required.
     confirm: dict[str, Any] | None = None
-    for c in after_sweep[3:]:
-        if side == "BUY" and float(c["close"]) > reaction_high:
-            confirm = c
+    confirm_index_local: int | None = None
+    for j in range(1, len(after_sweep)):
+        prev, current = after_sweep[j - 1], after_sweep[j]
+        prev_o, prev_c = float(prev["open"]), float(prev["close"])
+        curr_o, curr_c = float(current["open"]), float(current["close"])
+        if side == "SELL":
+            valid_pair = prev_c < prev_o and curr_c < curr_o and curr_c < prev_c
+        else:
+            valid_pair = prev_c > prev_o and curr_c > curr_o and curr_c > prev_c
+        if valid_pair:
+            confirm, confirm_index_local = current, j
             break
-        if side == "SELL" and float(c["close"]) < reaction_low:
-            confirm = c
-            break
-    if confirm is None:
-        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No later completed close beyond the post-sweep reaction range; sweep and indecision alone are not entry signals",))
-    evidence.append(f"Post-sweep reaction formed a possible base; later candle closed beyond its range at {float(confirm['close']):.5f}")
+    if confirm is None or confirm_index_local is None:
+        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))
+
+    third = after_sweep[confirm_index_local + 1] if confirm_index_local + 1 < len(after_sweep) else None
+    if third is not None:
+        o3, c3 = float(third["open"]), float(third["close"])
+        c2 = float(confirm["close"])
+        if side == "SELL" and c3 < o3 and c3 < c2:
+            confirm = third
+            evidence.append("Three consecutive bearish body closes with lower closes confirmed seller control")
+        elif side == "BUY" and c3 > o3 and c3 > c2:
+            confirm = third
+            evidence.append("Three consecutive bullish body closes with higher closes confirmed buyer control")
+        else:
+            evidence.append("Two consecutive directional body closes with close-to-close progress confirmed control")
+    else:
+        evidence.append("Two consecutive directional body closes with close-to-close progress confirmed control")
+    evidence.append(f"Control confirmation close at {float(confirm['close']):.5f}; entry is assessed at that close")
     confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
     if confirm_index is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate confirmation candle in ordered data",))
@@ -260,12 +272,13 @@ def analyze_setup(
     # the exact pullback decision rules are still open.
     entry = float(confirm["close"])
     if side == "BUY":
-        stop = min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1])
+        # Invalidation is beyond the sweep extreme.
+        stop = float(sweep["low"])
         risk = entry - stop
         target_levels = [x for x in ref_highs if x > entry]
         target = min(target_levels) if target_levels else None
     else:
-        stop = max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1])
+        stop = float(sweep["high"])
         risk = stop - entry
         target_levels = [x for x in ref_lows if x < entry]
         target = max(target_levels) if target_levels else None

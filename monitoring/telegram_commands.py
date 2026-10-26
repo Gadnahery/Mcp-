@@ -294,7 +294,11 @@ async def run_replay_command(text: str) -> str:
         api = DerivMarketData()
         m15 = await api.candles(symbol, "15m", max(60, count // 3))
         m5 = await api.candles(symbol, "5m", count)
-        result = run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
+        try:
+            m1 = await api.candles(symbol, "1m", min(300, count * 2))
+        except Exception:
+            m1 = []
+        result = run_replay(symbol, m15, m5, m1=m1, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
         return format_replay_report(result)
     except Exception as exc:
         logger.exception("Replay failed for %s", symbol)

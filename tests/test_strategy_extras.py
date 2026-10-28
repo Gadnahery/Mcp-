@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from monitoring.replay_engine import _simulate, run_replay
-from monitoring.strategy import _confirmation_sequence_quality, _latest_unambiguous_sweep, _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, analyze_setup
+from monitoring.strategy import _confirmation_sequence_quality, _latest_unambiguous_sweep, _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, _sweep_rejection_evidence, analyze_setup
 from tests.synth import extend_5m, with_1m
 from tests.test_engine_positive_path import _mk, build
 
@@ -52,6 +52,14 @@ class ReactionAreaTests(unittest.TestCase):
         by_level = {round(a["level"], 1): a for a in highs}
         self.assertFalse(by_level[12.0]["significant"])
         self.assertTrue(by_level[20.0]["significant"])
+
+
+class SweepEvidenceTests(unittest.TestCase):
+    def test_rejection_wick_is_described_as_evidence_not_proof_of_absorption(self):
+        candle = {"open": 102.0, "high": 106.0, "low": 100.0, "close": 101.0}
+        evidence = _sweep_rejection_evidence("SELL", candle)
+        self.assertIn("upper rejection wick", evidence)
+        self.assertIn("not direct proof of absorption", evidence)
 
 
 class SweepAmbiguityTests(unittest.TestCase):

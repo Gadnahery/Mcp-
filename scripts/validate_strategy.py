@@ -75,8 +75,8 @@ def main() -> int:
         print("WARNING: no 1M history supplied. Outcome resolution falls back to 5M, so stop/target order inside a 5M candle is unknowable.")
     elif len(m1) < len(m5) * 3:
         print("WARNING: 1M history is sparse relative to 5M history; some signals may be skipped or resolved at coarser 5M precision.")
-    if n < 2_000:
-        print(f"WARNING: only {n} 5M bars. This is a smoke test, not a meaningful profitability sample; aim for several months per market.")
+    if len(m5) < 2_000:
+        print(f"WARNING: only {len(m5)} 5M bars. This is a smoke test, not a meaningful profitability sample; aim for several months per market.")
 
     n = len(m5)
     boundaries = (int(n * 0.60), int(n * 0.80), n)

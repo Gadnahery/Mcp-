@@ -44,9 +44,10 @@ create table if not exists strategy_alerts (
   id text primary key,
   symbol text, side text,
   entry double precision, stop double precision, target double precision, rr double precision,
-  style text, alerted_at bigint, entry_epoch bigint, assumed_spread double precision default 0,
+  style text, alerted_at bigint, signal_epoch bigint, entry_epoch bigint, assumed_spread double precision default 0,
   status text default 'open', closed_at bigint, r double precision
 );
+alter table strategy_alerts add column if not exists signal_epoch bigint;
 alter table strategy_alerts add column if not exists assumed_spread double precision default 0;
 alter table strategy_alerts enable row level security;  -- the service key bypasses RLS; keep it server-side only
 ```

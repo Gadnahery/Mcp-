@@ -478,9 +478,9 @@ def analyze_setup(
     # Normal setups need two directional body closes; counter-bias setups must find
     # a full three-candle strong sequence that also breaks the sweep-candle boundary.
     counter_bias_required = bool(
-        m15_dom and
-        ((m15_dom == "bullish" and side == "SELL") or
-         (m15_dom == "bearish" and side == "BUY"))
+        context_bias and
+        ((context_bias == "bullish" and side == "SELL") or
+         (context_bias == "bearish" and side == "BUY"))
     )
     confirm: dict[str, Any] | None = None
     count = 0
@@ -513,9 +513,9 @@ def analyze_setup(
     path = "dominance_closes"
     reaction_high = reaction_low = None
     counter_bias = bool(
-        m15_dom and
-        ((m15_dom == "bullish" and side == "SELL") or
-         (m15_dom == "bearish" and side == "BUY"))
+        context_bias and
+        ((context_bias == "bullish" and side == "SELL") or
+         (context_bias == "bearish" and side == "BUY"))
     )
     if counter_bias:
         confirm_index_for_gate = next(
@@ -598,7 +598,7 @@ def analyze_setup(
         msg = f"Next reaction area offers only 1:{plan['rr_market']:.2f} at the confirming close (net of assumed spread {spread:g}); minimum is 1:{min_rr:g}"
         if plan["rr_pullback"] is not None:
             msg += f"; a retest entry would offer 1:{plan['rr_pullback']:.2f}"
-        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "side": side, "entry": entry, "stop": stop, "target": target, "sweep_epoch": int(sweep["epoch"]), "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"]})
+        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "side": side, "entry": entry, "stop": stop, "target": target, "sweep_epoch": int(sweep["epoch"]), "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"], "spread": spread})
     style = ("pullback_limit" if plan["style"] == "pullback_limit"
              else ("dominance_closes" if path == "dominance_closes" else "decisive_close"))
     final_entry = float(plan["entry"])

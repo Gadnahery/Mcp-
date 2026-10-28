@@ -47,6 +47,8 @@ def metrics(result: dict[str, Any]) -> dict[str, Any]:
         "open_or_unresolved": sum(1 for c in candidates if c.get("r") is None),
         "outcome_resolution": sorted({c.get("outcome_resolution", "unknown") for c in candidates}),
         "gate_tally": result.get("tally", {}),
+        "near_misses": result.get("near_misses", {}),
+        "bars_skipped_no_1m": result.get("bars_skipped_no_1m", 0),
     }
 
 
@@ -56,6 +58,8 @@ def main() -> int:
     parser.add_argument("--spread", type=float, default=None,
                         help="Explicit assumed spread in price units; required for symbols without a configured default")
     parser.add_argument("--warmup", type=int, default=60, help="5M warmup candles before each evaluation window")
+    parser.add_argument("--min-rr", type=float, default=3.0,
+                        help="Diagnostic minimum R:R; default 3.0. Lower values are sensitivity tests, not recommended live settings.")
     args = parser.parse_args()
 
     with open(args.history, encoding="utf-8") as handle:
@@ -75,11 +79,14 @@ def main() -> int:
         ("validation", boundaries[0], boundaries[1]),
         ("holdout", boundaries[1], boundaries[2]),
     ]
-    opts = {"spread": args.spread} if args.spread is not None else {}
+    opts = {"min_rr": args.min_rr}
+    if args.spread is not None:
+        opts["spread"] = args.spread
     print(f"Symbol: {data.get('symbol', '?')} | 5M bars: {n} | 1M bars: {len(m1)}")
     print("Chronological split: 60% development / 20% validation / 20% holdout.")
     print("The holdout must remain untouched while any rules or thresholds are adjusted.")
     print(f"Cost assumption: {'explicit ' + str(args.spread) if args.spread is not None else 'configured symbol default; unknown symbols safely fail cost gate'}")
+    print(f"Minimum R:R: {args.min_rr} (values below 3.0 are diagnostic sensitivity tests only)")
     print()
     for name, start, end in windows:
         context_start = max(0, start - args.warmup)

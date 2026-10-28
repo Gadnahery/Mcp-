@@ -311,6 +311,7 @@ The following implementation gaps identified in the research review have now bee
 
 ### Still not completed / not proven
 
+- Use `python scripts/fetch_history.py SYMBOL START_DATE END_DATE history.json` to fetch 15M, 5M and 1M history, then run `python scripts/validate_strategy.py history.json` for chronological 60% development / 20% validation / 20% holdout metrics. For symbols without a configured spread, pass a measured assumption using `--spread VALUE`; do not use a guessed value.
 - These changes do not establish profitability. No claim of a positive edge should be made until historical replay has been run on sufficiently large, market-specific datasets with an untouched holdout period.
 - The 20% single-candle and 45% mean-body thresholds, two-swing structural proxy, swing wings, reaction-size thresholds and sweep-depth thresholds remain hypotheses. They must be compared against annotated examples and tested out of sample.
 - Current cost modelling is a configured spread assumption; it does not yet model variable spread at every candle, commissions, financing, latency or real order fills.

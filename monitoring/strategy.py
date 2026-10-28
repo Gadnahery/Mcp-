@@ -149,6 +149,34 @@ def _structure_bias(candles: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _confirmation_sequence_quality(
+    side: Side,
+    candles: list[dict[str, Any]],
+    min_mean_body: float = 0.40,
+) -> tuple[bool, str]:
+    """Reject weak candle bodies or closes that fail to hold near the directional extreme."""
+    if len(candles) < 2:
+        return False, "Need at least two candles to assess confirmation quality"
+    ratios: list[float] = []
+    for candle in candles:
+        o, h, low, close = (float(candle[k]) for k in ("open", "high", "low", "close"))
+        candle_range = h - low
+        if candle_range <= 0:
+            return False, "Confirmation contains a zero-range candle"
+        body_ratio = abs(close - o) / candle_range
+        close_position = (close - low) / candle_range
+        if body_ratio < DOMINANCE_MIN_BODY:
+            return False, "Confirmation contains a weak/doji-like body"
+        if side == "BUY" and close_position < 0.65:
+            return False, "Bullish confirmation did not close in the upper 35% of its range"
+        if side == "SELL" and close_position > 0.35:
+            return False, "Bearish confirmation did not close in the lower 35% of its range"
+        ratios.append(body_ratio)
+    if sum(ratios) / len(ratios) < min_mean_body:
+        return False, f"Mean confirmation body/range is below {min_mean_body:.2f}"
+    return True, "Directional bodies are strong and closes hold near the candle extreme"
+
+
 def _strong_counter_bias_confirmation(
     side: Side,
     sweep: dict[str, Any],
@@ -172,6 +200,11 @@ def _strong_counter_bias_confirmation(
             return False, "Counter-bias confirmation contains a candle without a directional body"
         if body_ratio < DOMINANCE_MIN_BODY:
             return False, "Counter-bias confirmation contains a doji-like weak body"
+        close_position = (close - low) / candle_range if candle_range > 0 else 0.5
+        if side == "SELL" and close_position > 0.35:
+            return False, "Bearish counter-bias candle did not close in the lower 35% of its range"
+        if side == "BUY" and close_position < 0.65:
+            return False, "Bullish counter-bias candle did not close in the upper 35% of its range"
         if i > 0 and not (closes[i] < closes[i - 1] if side == "SELL" else closes[i] > closes[i - 1]):
             return False, "Counter-bias confirmation lacks consecutive close-to-close progress"
     mean_body_ratio = sum(
@@ -512,9 +545,11 @@ def analyze_setup(
                 continue
             confirm, count = third, 3
             break
-        confirm, count = current, 2
-        if third_matches:
-            confirm, count = third, 3
+        sequence = after_sweep[j - 1:j + 2] if third_matches else after_sweep[j - 1:j + 1]
+        quality_ok, _ = _confirmation_sequence_quality(side, sequence)
+        if not quality_ok:
+            continue
+        confirm, count = (third, 3) if third_matches else (current, 2)
         break
     if confirm is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))

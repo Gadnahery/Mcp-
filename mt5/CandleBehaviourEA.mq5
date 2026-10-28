@@ -1,5 +1,5 @@
 #property strict
-#property version "0.2.0"
+#property version "0.3.0"
 #property description "Candle-behaviour EA prototype. Demo account only."
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -24,13 +24,6 @@ input double MaxSpreadPoints=0.0;
 input int MaxEntryAgeMinutes=5;
 input bool UseM5Confirmation=false; // retained for symbols where M1 entry confirmation is unsuitable
 input bool AllowMixedH1Context=false;
-// Trade management: protect gains and exit if profitable momentum reverses.
-input bool EnableProfitProtection=true;
-input double ProtectProfitAtR=0.80;       // move SL past breakeven after +0.8R
-input double LockProfitAtR=0.10;          // lock at least +0.1R once protection triggers
-input bool CloseOnM1Reversal=true;
-input double CloseReversalAtR=0.50;       // reversal exit only after trade has reached +0.5R
-input int ReversalCloses=2;               // consecutive opposite M1 closes required
 
 datetime dayStart=0;
 double dayEquity=0;
@@ -132,51 +125,7 @@ double Lots(double entry,double sl){
  double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);if(step<=0)return 0;return NormalizeDouble(MathFloor(MathMin(raw,SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX))/step)*step,step<0.01?3:2);
 }
 
-string RiskKey(){return "CBEA_R_"+_Symbol+"_"+IntegerToString(MagicNumber);}
-bool PositionIsOurs(){
- if(!PositionSelect(_Symbol))return false;
- return (long)PositionGetInteger(POSITION_MAGIC)==MagicNumber;
-}
-void ManageOpenTrade(){
- if(!PositionIsOurs())return;
- long ptype=PositionGetInteger(POSITION_TYPE);
- int side=ptype==POSITION_TYPE_BUY?BUY_SIDE:SELL_SIDE;
- double entry=PositionGetDouble(POSITION_PRICE_OPEN);
- double sl=PositionGetDouble(POSITION_SL);
- double tp=PositionGetDouble(POSITION_TP);
- double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID),ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
- double current=side==BUY_SIDE?bid:ask;
- double profitDistance=side==BUY_SIDE?current-entry:entry-current;
- string key=RiskKey();
- double initialRisk=GlobalVariableCheck(key)?GlobalVariableGet(key):0.0;
- // Recover approximate initial R after terminal restart if persistent key is missing.
- if(initialRisk<=0 && sl>0 && ((side==BUY_SIDE&&sl<entry)||(side==SELL_SIDE&&sl>entry)))initialRisk=MathAbs(entry-sl);
- if(initialRisk<=0)return;
- trade.SetExpertMagicNumber(MagicNumber);
- if(EnableProfitProtection && profitDistance>=ProtectProfitAtR*initialRisk){
-  double wanted=side==BUY_SIDE?entry+LockProfitAtR*initialRisk:entry-LockProfitAtR*initialRisk;
-  wanted=NormalizeDouble(wanted,_Digits);
-  bool improves=side==BUY_SIDE?(sl==0||wanted>sl+_Point):(sl==0||wanted<sl-_Point);
-  double minStop=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
-  bool valid=side==BUY_SIDE?(wanted<bid-minStop):(wanted>ask+minStop);
-  if(improves&&valid&&!trade.PositionModify(_Symbol,wanted,tp))
-   Print("Profit protection modify failed: ",trade.ResultRetcodeDescription());
- }
- if(!CloseOnM1Reversal||profitDistance<CloseReversalAtR*initialRisk)return;
- datetime closedBar=iTime(_Symbol,PERIOD_M1,1);
- if(closedBar<=0||closedBar==lastManagedM1)return;
- lastManagedM1=closedBar;
- MqlRates r[];if(!Rates(PERIOD_M1,ReversalCloses+2,r))return;
- int n=MathMax(2,ReversalCloses);
- for(int i=1;i<=n;i++){
-  bool opposite=side==BUY_SIDE?(r[i].close<r[i].open&&r[i].close<r[i+1].close):(r[i].close>r[i].open&&r[i].close>r[i+1].close);
-  if(!opposite)return;
- }
- if(trade.PositionClose(_Symbol))
-  Print("Profit-protection exit: consecutive M1 candles reversed after favorable move. Profit distance=",profitDistance);
- else Print("Reversal close failed: ",trade.ResultRetcodeDescription());
-}
-\nvoid Evaluate(){
+void Evaluate(){
  RefreshDay();
  if(!EnableTrading){Comment("ANALYSIS ONLY: EnableTrading=false");return;}
  if(DemoAccountOnly&&AccountInfoInteger(ACCOUNT_TRADE_MODE)!=ACCOUNT_TRADE_MODE_DEMO){Comment("BLOCKED: demo account required");return;}
@@ -195,7 +144,7 @@ void ManageOpenTrade(){
  double lots=Lots(entry,sl);if(lots<=0){Comment("NO TRADE: risk sizing invalid or minimum lot too large");return;}
  trade.SetExpertMagicNumber(MagicNumber);trade.SetDeviationInPoints(10);trade.SetTypeFillingBySymbol(_Symbol);
  bool ok=side==BUY_SIDE?trade.Buy(lots,_Symbol,0,NormalizeDouble(sl,_Digits),NormalizeDouble(tp,_Digits),"CandleBehaviourEA BUY"):trade.Sell(lots,_Symbol,0,NormalizeDouble(sl,_Digits),NormalizeDouble(tp,_Digits),"CandleBehaviourEA SELL");
- if(ok){tradesToday++;GlobalVariableSet(RiskKey(),risk);Print("DEMO EA ",side==BUY_SIDE?"BUY":"SELL"," lots=",lots," SL=",sl," TP=",tp," RR=",reward/risk);}else Print("Order rejected: ",trade.ResultRetcodeDescription());
+ if(ok){tradesToday++;Print("DEMO EA ",side==BUY_SIDE?"BUY":"SELL"," lots=",lots," SL=",sl," TP=",tp," RR=",reward/risk);}else Print("Order rejected: ",trade.ResultRetcodeDescription());
 }
-int OnInit(){if(MinimumRewardRisk<3.0||ConfirmationCloses<2||ConfirmationCloses>3||RiskPercent<=0||FixedLotSize<0.01||MaxDailyLossPercent<=0||MaxTradesPerDay<1||ProtectProfitAtR<=0||LockProfitAtR<0||CloseReversalAtR<=0||ReversalCloses<2||ReversalCloses>3)return INIT_PARAMETERS_INCORRECT;if(DemoAccountOnly&&AccountInfoInteger(ACCOUNT_TRADE_MODE)!=ACCOUNT_TRADE_MODE_DEMO){Print("Refusing non-demo account");return INIT_FAILED;}RefreshDay();Print("EA prototype. Demo-only; EnableTrading=",EnableTrading," fixedLots=",UseFixedLotSize," lot=",FixedLotSize);return INIT_SUCCEEDED;}
+int OnInit(){if(MinimumRewardRisk<3.0||ConfirmationCloses<2||ConfirmationCloses>3||RiskPercent<=0||FixedLotSize<0.01||MaxDailyLossPercent<=0||MaxTradesPerDay<1)return INIT_PARAMETERS_INCORRECT;if(DemoAccountOnly&&AccountInfoInteger(ACCOUNT_TRADE_MODE)!=ACCOUNT_TRADE_MODE_DEMO){Print("Refusing non-demo account");return INIT_FAILED;}RefreshDay();Print("EA prototype. Demo-only; EnableTrading=",EnableTrading," fixedLots=",UseFixedLotSize," lot=",FixedLotSize);return INIT_SUCCEEDED;}
 void OnTick(){\n ManageOpenTrade(); // runs on every tick so SL protection is not delayed to the next entry candle\n static datetime last=0;datetime t=iTime(_Symbol,EntryTF(),1);if(t<=0||t==last)return;last=t;Evaluate();\n}

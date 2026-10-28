@@ -431,9 +431,8 @@ def analyze_setup(
         evidence.append(f"5M close-to-close dominance: {m5_dom}")
     else:
         evidence.append("5M dominance is mixed/unclear; inspect the candle sequence at the area")
-    # Only apply the opposing-direction filter when 15M has a clear direction.
-    # Previously, unclear 1H (None) made every clear 5M direction look opposed.
-    # Unclear context is not the same as opposing context.
+    # Timeframe disagreement is recorded as evidence, not used as a premature hard
+    # rejection. The setup-specific counter-bias gate runs only after a sweep is found.
     if m5_dom and context_bias and m5_dom != context_bias:
         evidence.append(
             f"5M close-to-close progress ({m5_dom}) conflicts with 15M context ({context_bias}); "

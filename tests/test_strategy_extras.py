@@ -161,6 +161,14 @@ class OptsAndReplayTests(unittest.TestCase):
         self.assertEqual(_simulate(c, [f(100.5, 101), f(98.9, 101)])[0].split()[0], "cancelled")
         self.assertEqual(_simulate(c, [f(100.5, 101)] * 3), ("unfilled", None))
 
+    def test_market_replay_uses_next_open_and_does_not_count_gap_past_target_as_win(self):
+        c = SimpleNamespace(side="BUY", entry=100.0, stop_loss=99.0, take_profit=103.0,
+                            risk_reward=3.0, entry_style="decisive_close", assumed_spread=0.0)
+        self.assertEqual(_simulate(c, [{"open": 104.0, "high": 105.0, "low": 103.5, "close": 104.0}]),
+                         ("missed (gap beyond target)", None))
+        outcome = _simulate(c, [{"open": 101.0, "high": 103.2, "low": 100.5, "close": 103.0}])
+        self.assertEqual(outcome, ("target", 1.0))
+
     def test_replay_reports_near_misses_and_summary(self):
         m15, m5 = build()
         m5x = extend_5m(m5)

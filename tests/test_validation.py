@@ -23,6 +23,8 @@ class ValidationMetricTests(unittest.TestCase):
         self.assertEqual(m["max_drawdown_r"], 2.0)
         self.assertEqual(m["max_consecutive_losses"], 2)
         self.assertEqual(m["open_or_unresolved"], 1)
+        self.assertEqual(m["missed_or_cancelled"], 0)
+        self.assertEqual(m["outcome_resolution_counts"], {"1M": 3, "5M fallback": 1})
 
 
 if __name__ == "__main__":

@@ -73,7 +73,7 @@ bool Sweep(int &side,double &extreme,datetime &when){
 }
 bool Confirm(int side,datetime sweptAt){
  int n=MathMax(2,MathMin(3,ConfirmationCloses));MqlRates r[];if(!Rates(EntryTF(),n+3,r))return false;
- if(r[1].time<sweptAt||TimeCurrent()-r[1].time>MaxEntryAgeMinutes*60)return false;
+ if(r[1].time<sweptAt+300||TimeCurrent()-r[1].time>MaxEntryAgeMinutes*60)return false; // confirmation must begin after the 5M sweep candle closes
  double sum=0,prev=0;
  for(int i=n;i>=1;i--){if(side==BUY_SIDE?r[i].close<=r[i].open:r[i].close>=r[i].open)return false;double b=BodyRatio(r[i]);if(b<MinSingleBodyToRange)return false;sum+=b;if(i<n&&(side==BUY_SIDE?r[i].close<=prev:r[i].close>=prev))return false;prev=r[i].close;}
  return sum/n>=MinBodyToRange;

@@ -45,7 +45,11 @@ def metrics(result: dict[str, Any]) -> dict[str, Any]:
         "max_drawdown_r": round(drawdown, 3),
         "max_consecutive_losses": max_losses,
         "open_or_unresolved": sum(1 for c in candidates if c.get("r") is None),
-        "outcome_resolution": sorted({c.get("outcome_resolution", "unknown") for c in candidates}),
+        "missed_or_cancelled": sum(1 for c in candidates if str(c.get("outcome", "")).startswith(("missed", "cancelled", "unfilled"))),
+        "outcome_resolution_counts": {
+            resolution: sum(1 for c in candidates if c.get("outcome_resolution", "unknown") == resolution)
+            for resolution in sorted({c.get("outcome_resolution", "unknown") for c in candidates})
+        },
         "gate_tally": result.get("tally", {}),
     }
 
@@ -67,6 +71,12 @@ def main() -> int:
         raise SystemExit("Need a longer history: at least 180 5M bars and 20 15M bars.")
     if args.spread is not None and args.spread < 0:
         raise SystemExit("--spread must be zero or positive.")
+    if not m1:
+        print("WARNING: no 1M history supplied. Outcome resolution falls back to 5M, so stop/target order inside a 5M candle is unknowable.")
+    elif len(m1) < len(m5) * 3:
+        print("WARNING: 1M history is sparse relative to 5M history; some signals may be skipped or resolved at coarser 5M precision.")
+    if n < 2_000:
+        print(f"WARNING: only {n} 5M bars. This is a smoke test, not a meaningful profitability sample; aim for several months per market.")
 
     n = len(m5)
     boundaries = (int(n * 0.60), int(n * 0.80), n)
@@ -95,7 +105,13 @@ def main() -> int:
             warmup=min(args.warmup, max(1, len(segment5) - 2)), opts=opts,
         )
         print(f"[{name.upper()}] 5M indexes {start}:{end}")
-        print(json.dumps(metrics(result), indent=2, sort_keys=True))
+        window_metrics = metrics(result)
+        resolved_count = window_metrics["resolved"]
+        if name == "holdout" and resolved_count < 30:
+            print(f"WARNING: holdout has only {resolved_count} resolved outcomes; treat all win-rate/expectancy estimates as highly uncertain.")
+        if window_metrics["outcome_resolution"] != ["1M"]:
+            print("WARNING: this window mixes or uses coarser-than-1M outcome resolution; do not compare it directly with a fully 1M-resolved window.")
+        print(json.dumps(window_metrics, indent=2, sort_keys=True))
         print()
     print("Interpret results by market separately. Small samples, changing spreads, and OHLC ambiguity can invalidate conclusions.")
     return 0

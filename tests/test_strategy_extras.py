@@ -120,10 +120,10 @@ class TargetSelectionTests(unittest.TestCase):
 class OptsAndReplayTests(unittest.TestCase):
     def test_opts_can_loosen_rr(self):
         m15, m5 = build()
-        strict = analyze_setup("TEST", m15, m5, with_1m(m5), {"min_rr": 50.0})
+        strict = analyze_setup("TEST", m15, m5, with_1m(m5), {"min_rr": 50.0, "spread": 0.0})
         self.assertEqual(strict.stage, "risk_reward")
         self.assertIn("rr_market", strict.details)
-        self.assertEqual(analyze_setup("TEST", m15, m5, with_1m(m5)).status, "CANDIDATE")
+        self.assertEqual(analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0}).status, "CANDIDATE")
 
     def test_simulate_handles_retest_fill_and_cancel(self):
         c = SimpleNamespace(side="BUY", entry=100.0, stop_loss=99.0, take_profit=103.0,
@@ -136,7 +136,7 @@ class OptsAndReplayTests(unittest.TestCase):
     def test_replay_reports_near_misses_and_summary(self):
         m15, m5 = build()
         m5x = extend_5m(m5)
-        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0})
+        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0, "spread": 0.0})
         self.assertGreater(result["near_misses"]["setups_that_failed_rr_or_target"], 0)
         self.assertEqual(result["summary"]["targets"], 0)
         ok = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20)
@@ -152,14 +152,14 @@ class NoPullbackByDefaultTests(unittest.TestCase):
         import monitoring.strategy as strat
         self.assertFalse(strat.PULLBACK_ENABLED)
         m15, m5 = build()
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         if result.candidate:
             self.assertNotEqual(result.candidate.entry_style, "pullback_limit")
 
     def test_replay_counts_one_near_miss_per_sweep_and_reports_what_if_taken(self):
         m15, m5 = build()
         m5x = extend_5m(m5)
-        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0})
+        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0, "spread": 0.0})
         nm = result["near_misses"]
         self.assertEqual(nm["setups_that_failed_rr_or_target"], 1)   # same sweep seen on several bars = one setup
         self.assertIn("if_taken_at_market", nm)

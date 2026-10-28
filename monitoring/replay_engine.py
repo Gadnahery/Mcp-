@@ -9,33 +9,59 @@ from .strategy import analyze_setup
 
 
 def _simulate(c: Any, future: list[dict[str, Any]], max_wait: int = 12) -> tuple[str, float | None]:
-    """Outcome after a signal. Retest limits must fill first (within max_wait candles).
+    """Resolve outcomes at the finest supplied candle resolution.
 
-    Same-candle stop+target is scored as a stop (worst case). Returns (outcome, R multiple).
+    For market entries, use the first post-signal candle open as a conservative executable
+    fill when OHLC contains it. Planned close is retained only for fixtures without opens.
+    Same-candle stop+target is scored as a stop (worst case); gross/net R uses the actual
+    fill and the candidate's configured spread when that information is available.
     """
     buy = c.side == "BUY"
     filled = c.entry_style != "pullback_limit"
-    risk = abs(c.entry - c.stop_loss)
+    spread = max(0.0, float(getattr(c, "assumed_spread", 0.0)))
+    fill_price: float | None = None
+    risk: float | None = None
+
+    def target_r(fill: float) -> float:
+        risk_value = abs(fill - c.stop_loss) + spread
+        reward_value = (c.take_profit - fill if buy else fill - c.take_profit) - spread
+        return round(reward_value / risk_value, 2) if risk_value > 0 and reward_value > 0 else 0.0
+
     for n, f in enumerate(future):
-        hit_stop = f["low"] <= c.stop_loss if buy else f["high"] >= c.stop_loss
-        hit_tp = f["high"] >= c.take_profit if buy else f["low"] <= c.take_profit
         if not filled:
+            hit_stop = f["low"] <= c.stop_loss if buy else f["high"] >= c.stop_loss
             if hit_stop:
                 return "cancelled (stop level hit before fill)", None
             if n >= max_wait:
                 return "unfilled", None
             if (f["low"] <= c.entry) if buy else (f["high"] >= c.entry):
                 filled = True
-                if hit_tp:  # filled and ran to target within the same candle: unknowable order
+                fill_price = float(c.entry)
+                risk = abs(fill_price - c.stop_loss) + spread
+                hit_tp = f["high"] >= c.take_profit if buy else f["low"] <= c.take_profit
+                if hit_tp:
                     return "stop (fill candle also hit target; worst case)", -1.0
                 continue
             continue
+
+        if fill_price is None:
+            fill_price = float(f.get("open", c.entry))
+            # If the first executable quote has already passed the target, the planned
+            # entry was missed; do not count it as a win at an impossible price.
+            if (buy and fill_price >= c.take_profit) or (not buy and fill_price <= c.take_profit):
+                return "missed (gap beyond target)", None
+            if (buy and fill_price <= c.stop_loss) or (not buy and fill_price >= c.stop_loss):
+                return "stop (gap at entry)", -1.0
+            risk = abs(fill_price - c.stop_loss) + spread
+
+        hit_stop = f["low"] <= c.stop_loss if buy else f["high"] >= c.stop_loss
+        hit_tp = f["high"] >= c.take_profit if buy else f["low"] <= c.take_profit
         if hit_stop and hit_tp:
             return "stop (same candle; worst case)", -1.0
         if hit_stop:
             return "stop", -1.0
         if hit_tp:
-            return "target", round(c.risk_reward, 2)
+            return "target", target_r(fill_price if fill_price is not None else c.entry)
     return ("open" if filled else "unfilled"), None
 
 
@@ -99,7 +125,9 @@ def run_replay(
                     pseudo = SimpleNamespace(side=result.side, entry=det["entry"], stop_loss=det["stop"],
                                              take_profit=det["target"], risk_reward=det.get("rr_market") or 0.0,
                                              entry_style="market")
-                    out, r_ = _simulate(pseudo, m5[idx + 1:])
+                    signal_epoch = int(det.get("confirm_epoch", 0)) + 300
+                    future_1m = [bar for bar in (m1 or []) if int(bar["epoch"]) >= signal_epoch]
+                    out, r_ = _simulate(pseudo, future_1m if future_1m else m5[idx + 1:])
                     entry_["if_taken"] = out
                     entry_["if_taken_r"] = r_
                 near_misses[nm_key] = entry_
@@ -107,7 +135,10 @@ def run_replay(
         if result.candidate and key not in seen:
             seen.add(key)
             c = result.candidate
-            outcome, r_mult = _simulate(c, m5[idx + 1 :])
+            signal_epoch = int(c.candle_epoch) + 300
+            future_1m = [bar for bar in (m1 or []) if int(bar["epoch"]) >= signal_epoch]
+            outcome_candles = future_1m if future_1m else m5[idx + 1 :]
+            outcome, r_mult = _simulate(c, outcome_candles)
             candidates.append({
                 "side": c.side,
                 "entry": c.entry,
@@ -120,6 +151,8 @@ def run_replay(
                 "style": c.entry_style,
                 "invalidation": c.invalidation,
                 "evidence": list(c.evidence)[-3:],
+                "outcome_resolution": "1M" if future_1m else "5M fallback",
+                "assumed_spread": getattr(c, "assumed_spread", None),
             })
 
     done = [c for c in candidates if c.get("r") is not None]
@@ -168,7 +201,7 @@ def format_replay_report(result: dict[str, Any]) -> str:
     lines = [
         f"📼 Replay · {symbol}",
         f"Bars evaluated: {result['bars_evaluated']} "
-        f"(5M:{result['m5_count']} / 15M:{result['m15_count']})",
+        f"(5M:{result['m5_count']} / 15M:{result['m15_count']}; outcome resolution uses 1M where covered)",
         "",
         "Where evaluations stopped (gate tally):",
     ]

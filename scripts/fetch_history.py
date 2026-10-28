@@ -51,6 +51,12 @@ def epoch(day: str) -> int:
 if __name__ == "__main__":
     symbol, d0, d1, path = sys.argv[1:5]
     s, e = epoch(d0), epoch(d1)
-    data = {"symbol": symbol, "m15": asyncio.run(fetch(symbol, 900, s, e)), "m5": asyncio.run(fetch(symbol, 300, s, e))}
+    data = {
+        "symbol": symbol,
+        "m15": asyncio.run(fetch(symbol, 900, s, e)),
+        "m5": asyncio.run(fetch(symbol, 300, s, e)),
+        "m1": asyncio.run(fetch(symbol, 60, s, e)),
+    }
     json.dump(data, open(path, "w"))
-    print(f"saved {len(data['m15'])} x 15M and {len(data['m5'])} x 5M candles to {path}")
+    json.dump(data, open(path, "w"))
+    print(f"saved {len(data['m15'])} x 15M, {len(data['m5'])} x 5M and {len(data['m1'])} x 1M candles to {path}")

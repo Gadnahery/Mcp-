@@ -311,9 +311,9 @@ async def run_replay_command(text: str) -> str:
         warmup = min(60, max(20, len(m5) // 4))
         if study:
             from .replay_engine import format_rr_study, rr_study
-            result = run_replay(symbol, m15, m5, m1=m1, warmup=warmup, opts={**opts, "min_rr": 0.01, "pullback": False})
+            result = run_replay(symbol, m15, m5, m1=None, warmup=warmup, opts={**opts, "min_rr": 0.01, "pullback": False})
             return format_rr_study(symbol, rr_study(result.get("candidates") or []), result.get("bars_evaluated", 0))
-        result = run_replay(symbol, m15, m5, m1=m1, warmup=warmup, opts=opts)
+        result = run_replay(symbol, m15, m5, m1=None, warmup=warmup, opts=opts)
         return format_replay_report(result)
     except Exception as exc:
         logger.exception("Replay failed for %s", symbol)

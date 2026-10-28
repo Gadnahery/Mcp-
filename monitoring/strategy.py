@@ -129,6 +129,25 @@ def _dominance(candles: list[dict[str, Any]], n: int = 3) -> str | None:
     return None
 
 
+def _structure_bias(candles: list[dict[str, Any]]) -> str | None:
+    """Infer broad structure from confirmed swing progression, not candle colours.
+
+    This is a conservative OHLC proxy: bullish requires both higher swing highs and
+    higher swing lows; bearish requires both lower swing highs and lower swing lows.
+    Mixed structure returns None and must not be described as a confirmed trend.
+    """
+    highs, lows = _swing_points(candles)
+    if len(highs) < 2 or len(lows) < 2:
+        return None
+    high_progress = highs[-1][1] - highs[-2][1]
+    low_progress = lows[-1][1] - lows[-2][1]
+    if high_progress > 0 and low_progress > 0:
+        return "bullish"
+    if high_progress < 0 and low_progress < 0:
+        return "bearish"
+    return None
+
+
 def _strong_counter_bias_confirmation(
     side: Side,
     sweep: dict[str, Any],
@@ -375,7 +394,12 @@ def analyze_setup(
         evidence.append(f"15M close-to-close dominance: {m15_dom}")
     else:
         evidence.append("15M close-to-close dominance is mixed/unclear")
-    context_bias = m15_dom
+    structural_bias = _structure_bias(m15)
+    context_bias = structural_bias or m15_dom
+    if structural_bias:
+        evidence.append(f"15M swing structure: {structural_bias} (higher/lower highs and lows)")
+    else:
+        evidence.append("15M swing structure is mixed/unclear; close-to-close progress is fallback context")
     # Use confirmed 15M swing references; 1H is intentionally removed.
     ref_highs, ref_lows = _swing_levels(m15[-100:])
     ref_highs = sorted(set(ref_highs))
@@ -396,10 +420,11 @@ def analyze_setup(
     # Only apply the opposing-direction filter when 15M has a clear direction.
     # Previously, unclear 1H (None) made every clear 5M direction look opposed.
     # Unclear context is not the same as opposing context.
-    if m5_dom and m15_dom and m5_dom != m15_dom:
-        recent_5m = m5[-5:]
-        if _dominance(recent_5m, 3) == m5_dom:
-            return Analysis(symbol, "NO_TRADE", None, "approach", tuple(evidence), ("5M is still making clear progress against the 15M direction; no confirmed loss of that control",))
+    if m5_dom and context_bias and m5_dom != context_bias:
+        evidence.append(
+            f"5M close-to-close progress ({m5_dom}) conflicts with 15M context ({context_bias}); "
+            "do not reject automatically—classify any setup against context and apply the appropriate confirmation gate"
+        )
 
     # Look for either a high sweep/rejection or a low sweep/reclaim at a meaningful
     # higher-timeframe reference. Context helps rank the setup; it does not dictate
@@ -420,9 +445,16 @@ def analyze_setup(
         if swept_highs:
             possible.append((i, "SELL", candle, min(swept_highs)))
     if possible:
-        # Prefer the latest sweep. If context conflicts with it, keep the setup for
-        # confirmation analysis but record that extra evidence is required.
-        _, side, sweep, swept_level = possible[-1]
+        # If the latest candle swept/reclaimed both sides, OHLC cannot reveal which
+        # happened first. Do not let append order invent a directional sequence.
+        latest_idx = max(item[0] for item in possible)
+        latest_sides = {item[1] for item in possible if item[0] == latest_idx}
+        if len(latest_sides) > 1:
+            return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (
+                "Ambiguous double-sided sweep in the same 5M candle; OHLC cannot establish which boundary was taken first",
+            ))
+        # Prefer the latest unambiguous sweep.
+        _, side, sweep, swept_level = max((item for item in possible if item[1] in latest_sides), key=lambda item: item[0])
         if context_bias and ((context_bias == "bullish" and side == "SELL") or (context_bias == "bearish" and side == "BUY")):
             evidence.append(f"{side} sweep runs against current dominant close-to-close bias; require especially clear confirmation")
 
@@ -513,7 +545,15 @@ def analyze_setup(
         f"5M execution at confirming close {entry:.5f} "
         f"({count} consecutive directional body closes with close-to-close progress)"
     )
-    spread = float(opts.get("spread", ASSUMED_SPREADS.get(symbol, 0.0)))
+    configured_spread = opts.get("spread", ASSUMED_SPREADS.get(symbol))
+    if configured_spread is None:
+        return Analysis(symbol, "NO_TRADE", side, "cost_model", tuple(evidence), tuple(missing + [
+            f"No assumed spread configured for {symbol}; refusing to report a cost-adjusted 1:{min_rr:g} setup using zero costs",
+            "Configure a measured or explicitly provisional ASSUMED_SPREADS value before evaluating this symbol",
+        ]), None, {"confirm_epoch": int(confirm["epoch"]), "symbol": symbol, "spread_missing": True})
+    spread = float(configured_spread)
+    if spread < 0:
+        return Analysis(symbol, "NO_TRADE", side, "cost_model", tuple(evidence), tuple(missing + ["Assumed spread cannot be negative"]))
     if side == "BUY":
         # Structural invalidation stays beyond the swept low.
         stop = min(float(sweep["low"]), min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1]))
@@ -549,7 +589,7 @@ def analyze_setup(
     if risk < min_risk:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + [f"Stop is only {risk:g} away, inside normal 5M noise (minimum {min_risk:g} = {MIN_RISK_MULT:g}x median 5M range); R:R would be meaningless"]), None, {"confirm_epoch": int(confirm["epoch"]), "risk": risk, "min_risk": min_risk})
     if target_area is None:
-        kind = "significant 15M reaction area" if target_mode != "nearest" else "15M reaction reference"
+        kind = "significant 5M/15M reaction area" if target_mode != "nearest" else "5M/15M reaction reference"
         return Analysis(symbol, "NO_TRADE", side, "target", tuple(evidence), tuple(missing + [f"No {kind} ahead in the trade direction"]), None, {"confirm_epoch": int(confirm["epoch"]), "no_target": True})
     target = float(target_area["level"])
     plan = _plan_entry(side, entry, stop, target, retest, retest_filled, spread, min_rr, False)  # one-way only: no limit/retest wait
@@ -568,7 +608,7 @@ def analyze_setup(
         if target_mode != "nearest"
         else f"nearest {target_area['timeframe']} swing/liquidity reference"
     )
-    evidence.append(f"Structural stop at {stop:.5f}; target = {'significant ' if target_mode != 'nearest' else ''}15M reaction area at {target:.5f} ({area_note}); planned R:R 1:{rr:.2f} net of assumed spread {spread:g}")
+    evidence.append(f"Structural stop at {stop:.5f}; target = {'significant ' if target_mode != 'nearest' else ''}{target_area['timeframe']} reaction/liquidity area at {target:.5f} ({area_note}); planned R:R 1:{rr:.2f} net of assumed spread {spread:g}")
     if style == "pullback_limit":
         evidence.append(f"Market entry at {entry:.5f} only offers 1:{plan['rr_market']:.2f}; LIMIT idea at the retest of the broken level {final_entry:.5f} (may never fill)")
         invalidation = (f"Limit idea only. Cancel if price trades {'below' if side == 'BUY' else 'above'} {stop:.5f} before filling, "
@@ -591,7 +631,7 @@ def analyze_setup(
         evidence=tuple(evidence),
         entry_style=style,
         sweep_epoch=int(sweep["epoch"]),
-        target_reference=("nearest significant 5M/15M reaction area in trade direction" if target_mode != "nearest" else "nearest detected 5M/15M swing in trade direction"),
+        target_reference=(f"nearest {'significant ' if target_mode != 'nearest' else ''}{target_area['timeframe']} reaction/liquidity area in trade direction"),
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)
 

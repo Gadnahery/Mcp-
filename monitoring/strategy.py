@@ -189,6 +189,37 @@ def _reaction_areas(candles: list[dict[str, Any]], tolerance: float, median_rang
     return build(highs, "high"), build(lows, "low")
 
 
+def _select_target_area(
+    side: str,
+    entry: float,
+    areas_5m: list[dict[str, Any]],
+    areas_15m: list[dict[str, Any]],
+    target_mode: str = "significant",
+) -> dict[str, Any] | None:
+    """Choose the nearest eligible reaction/liquidity area beyond entry.
+
+    The 5M areas give the strategy a nearby intraday target option; 15M areas
+    retain the broader structure context. In significant mode, a level must
+    show a meaningful reaction or repeated touches on its own timeframe.
+    """
+    candidates: list[dict[str, Any]] = []
+    for timeframe, areas in (("5M", areas_5m), ("15M", areas_15m)):
+        for area in areas:
+            if target_mode != "nearest" and not area.get("significant", False):
+                continue
+            level = float(area["level"])
+            is_ahead = level > entry if side == "BUY" else level < entry
+            if not is_ahead:
+                continue
+            candidate = dict(area)
+            candidate["timeframe"] = timeframe
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    # Nearest valid target first; at equal prices prefer the higher-timeframe level.
+    return min(candidates, key=lambda a: (abs(float(a["level"]) - entry), 0 if a["timeframe"] == "15M" else 1))
+
+
 def _plan_entry(side: str, market_entry: float, stop: float, target: float, retest: float | None,
                 retest_filled: bool, spread: float, min_rr: float = MIN_RR, pullback: bool = True) -> dict[str, Any]:
     """Choose market-at-close or retest-limit entry; R:R is net of the assumed spread."""
@@ -405,28 +436,38 @@ def analyze_setup(
         f"({count} consecutive directional body closes with close-to-close progress)"
     )
     spread = float(opts.get("spread", ASSUMED_SPREADS.get(symbol, 0.0)))
-    pool = areas_high if side == "BUY" else areas_low
-    if target_mode != "nearest":
-        pool = [a for a in pool if a["significant"]]
     if side == "BUY":
-        # Anchor to the sweep candle, but if price later traded beyond it before confirmation the real
-        # invalidation is that lower extreme (otherwise the stop sits inside price that already happened).
+        # Structural invalidation stays beyond the swept low.
         stop = min(float(sweep["low"]), min(float(c["low"]) for c in m5[sweep_index: confirm_index + 1]))
-        ahead = [a for a in pool if a["level"] > entry]
-        target_area = min(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["high"])
         retest_filled = any(float(c["low"]) <= retest for c in m5[confirm_index + 1:])
     else:
+        # Structural invalidation stays beyond the swept high.
         stop = max(float(sweep["high"]), max(float(c["high"]) for c in m5[sweep_index: confirm_index + 1]))
-        ahead = [a for a in pool if a["level"] < entry]
-        target_area = max(ahead, key=lambda a: a["level"]) if ahead else None
         retest = float(sweep["low"])
         retest_filled = any(float(c["high"]) >= retest for c in m5[confirm_index + 1:])
+
+    # Add nearby 5M reaction/liquidity areas to the existing 15M structure map.
+    # Use a slightly more sensitive threshold on 5M so clear intraday reactions
+    # are not ignored merely because they are smaller than a 15M candle range.
+    ranges_5m = [float(c["high"]) - float(c["low"]) for c in m5[-30:]]
+    median_5m_range = median(ranges_5m) if ranges_5m else 0.0
+    if median_5m_range > 0:
+        tolerance_5m = median_5m_range * 0.15
+        areas_5m_high, areas_5m_low = _reaction_areas(m5[-100:], tolerance_5m, median_5m_range * 0.75)
+    else:
+        areas_5m_high, areas_5m_low = [], []
+    target_area = _select_target_area(
+        side,
+        entry,
+        areas_5m_high if side == "BUY" else areas_5m_low,
+        areas_high if side == "BUY" else areas_low,
+        target_mode,
+    )
     risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + ["Structural stop does not produce positive risk"]))
-    ranges_5m = [float(c["high"]) - float(c["low"]) for c in m5[-30:]]
-    min_risk = median(ranges_5m) * MIN_RISK_MULT if ranges_5m else 0.0
+    min_risk = median_5m_range * MIN_RISK_MULT if median_5m_range > 0 else 0.0
     if risk < min_risk:
         return Analysis(symbol, "NO_TRADE", side, "risk", tuple(evidence), tuple(missing + [f"Stop is only {risk:g} away, inside normal 5M noise (minimum {min_risk:g} = {MIN_RISK_MULT:g}x median 5M range); R:R would be meaningless"]), None, {"confirm_epoch": int(confirm["epoch"]), "risk": risk, "min_risk": min_risk})
     if target_area is None:
@@ -443,8 +484,12 @@ def analyze_setup(
              else ("dominance_closes" if path == "dominance_closes" else "decisive_close"))
     final_entry = float(plan["entry"])
     rr = float(plan["rr"])
-    area_note = (f"touched {target_area['touches']}x, reaction {target_area['reaction']:.5f}"
-                 if target_mode != "nearest" else "nearest swing")
+    area_note = (
+        f"{target_area['timeframe']} area, touched {target_area['touches']}x, "
+        f"reaction {target_area['reaction']:.5f}"
+        if target_mode != "nearest"
+        else f"nearest {target_area['timeframe']} swing/liquidity reference"
+    )
     evidence.append(f"Structural stop at {stop:.5f}; target = {'significant ' if target_mode != 'nearest' else ''}15M reaction area at {target:.5f} ({area_note}); planned R:R 1:{rr:.2f} net of assumed spread {spread:g}")
     if style == "pullback_limit":
         evidence.append(f"Market entry at {entry:.5f} only offers 1:{plan['rr_market']:.2f}; LIMIT idea at the retest of the broken level {final_entry:.5f} (may never fill)")

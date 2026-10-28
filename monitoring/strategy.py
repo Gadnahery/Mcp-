@@ -545,12 +545,15 @@ def analyze_setup(
                 continue
             confirm, count = third, 3
             break
-        sequence = after_sweep[j - 1:j + 2] if third_matches else after_sweep[j - 1:j + 1]
-        quality_ok, _ = _confirmation_sequence_quality(side, sequence)
-        if not quality_ok:
-            continue
-        confirm, count = (third, 3) if third_matches else (current, 2)
-        break
+        pair_ok, _ = _confirmation_sequence_quality(side, after_sweep[j - 1:j + 1])
+        if third_matches:
+            triple_ok, _ = _confirmation_sequence_quality(side, after_sweep[j - 1:j + 2])
+            if triple_ok:
+                confirm, count = third, 3
+                break
+        if pair_ok:
+            confirm, count = current, 2
+            break
     if confirm is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))
     path = "dominance_closes"

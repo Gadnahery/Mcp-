@@ -162,9 +162,20 @@ async def run() -> None:
                     continue
                 stats["scanned"] += 1
 
-                # Score any open alerts for this symbol against the latest real candles
-                if await ledger.update(symbol, data["5m"]):
-                    STATUS["ledger"] = ledger.summary()
+                # Resolve shadow alerts on 1M candles, not 5M bars. Fetch deeper history
+                # only when this symbol has an open ledger row to keep polling costs bounded.
+                has_open_alert = any(
+                    row.get("symbol") == symbol and row.get("status") == "open"
+                    for row in ledger.rows
+                )
+                if has_open_alert:
+                    ledger_count = min(3000, max(
+                        settings.candle_count,
+                        int(os.getenv("LEDGER_CANDLE_COUNT", "1440")),
+                    ))
+                    data["1m"] = await api.candles(symbol, "1m", ledger_count)
+                    if await ledger.update(symbol, data["1m"]):
+                        STATUS["ledger"] = ledger.summary()
                 analysis = analyze_setup(symbol, data["15m"], data["5m"])
                 record_analysis(symbol, analysis)
                 candidate = analysis.candidate

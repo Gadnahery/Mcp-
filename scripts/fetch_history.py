@@ -58,5 +58,4 @@ if __name__ == "__main__":
         "m1": asyncio.run(fetch(symbol, 60, s, e)),
     }
     json.dump(data, open(path, "w"))
-    json.dump(data, open(path, "w"))
     print(f"saved {len(data['m15'])} x 15M, {len(data['m5'])} x 5M and {len(data['m1'])} x 1M candles to {path}")

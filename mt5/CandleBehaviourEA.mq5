@@ -73,7 +73,7 @@ bool Sweep(int &side,double &extreme,datetime &when){
   if(r[i].low<lo&&r[i].close>lo&&r[i].close>r[i].open){side=BUY_SIDE;extreme=r[i].low;when=r[i].time;return true;}
  }return false;
 }
-bool ConfirmM5(int side,datetime sweptAt){
+bool ConfirmM5(int side,datetime sweptAt,datetime &confirmedAt){
  int n=MathMax(2,MathMin(3,ConfirmationCloses));MqlRates r[];if(!Rates(PERIOD_M5,n+4,r))return false;
  // The full run of consecutive dominance candles must close after the sweep candle.
  if(r[n].time<sweptAt+300)return false;
@@ -84,7 +84,9 @@ bool ConfirmM5(int side,datetime sweptAt){
   if(i<n&&(side==BUY_SIDE?r[i].close<=prev:r[i].close>=prev))return false;
   prev=r[i].close;
  }
- return sum/n>=MinBodyToRange;
+ if(sum/n<MinBodyToRange)return false;
+ confirmedAt=r[1].time+300; // latest M5 dominance candle has fully closed
+ return true;
 }
 bool M1Entry(int side,datetime m5ConfirmedAt,double &entry,double &sl){
  if(UseM5Confirmation){ // optional fallback: use M5 close-based entry with original sweep invalidation
@@ -130,9 +132,10 @@ void Evaluate(){
  double spread=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID))/_Point;if(MaxSpreadPoints>0&&spread>MaxSpreadPoints){Comment("NO TRADE: spread gate");return;}
  int h=H1Bias(),m=M15Structure();if((h==0&&!AllowMixedH1Context)||m==0||(h!=0&&h!=m)){Comment("NO TRADE: H1/M15 context unclear or conflicting");return;}
  int side=0;double sweepExtreme=0;datetime st=0;if(!Sweep(side,sweepExtreme,st)){Comment("NO TRADE: no M5 sweep/reclaim");return;}
- if(side!=m||(h!=0&&side!=h)||!ConfirmM5(side,st)){Comment("NO TRADE: M5 sweep or consecutive dominance confirmation conflicts with context");return;}
+ datetime dominanceClosedAt=0;
+ if(side!=m||(h!=0&&side!=h)||!ConfirmM5(side,st,dominanceClosedAt)){Comment("NO TRADE: M5 sweep or consecutive dominance confirmation conflicts with context");return;}
  double entry=0,sl=0,tp=0;
- if(!M1Entry(side,st+300,entry,sl)){Comment("NO TRADE: waiting for a fresh M1 entry response after M5 dominance");return;}
+ if(!M1Entry(side,dominanceClosedAt,entry,sl)){Comment("NO TRADE: waiting for a fresh M1 entry response after M5 dominance");return;}
  if(!Target(side,entry,tp)){Comment("NO TRADE: no opposing reaction area");return;}
  double risk=MathAbs(entry-sl),reward=side==BUY_SIDE?tp-entry:entry-tp;if(risk<=0||reward/risk+1e-8<MinimumRewardRisk){Comment("NO TRADE: next area fails 1:3 R:R");return;}
  double minDist=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;

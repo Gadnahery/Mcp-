@@ -57,17 +57,20 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 ### Gate E — Post-sweep reaction and control confirmation
 - Require enough completed 5M candles after the sweep to assess the response.
 - A sweep alone, a zone touch, or a wick is not an entry.
-- Current confirmation requires two consecutive completed 5M candles with directional bodies and close-to-close progress in the proposed trade direction. A third matching close strengthens confirmation but is optional.
+- With no clear opposing 15M bias, two consecutive completed 5M directional-body closes with close-to-close progress may confirm control; a third matching close is stronger.
+- **Counter-bias gate:** when a SELL opposes bullish 15M dominance or a BUY opposes bearish 15M dominance, require three consecutive directional 5M closes with close-to-close progress, no doji-like body, average body/range of at least 0.45, and the final close beyond the sweep candle's opposite boundary (SELL below its low; BUY above its high). If any condition fails, return **NO_TRADE**.
+- The engine scans for a qualifying three-candle sequence rather than accepting an earlier weak pair and ignoring a later stronger sequence.
+- These body-strength thresholds are provisional research settings and must be reviewed against annotated historical replay.
 - The current 1M execution layer is disabled. Entry and R:R use the final 5M confirmation close.
 - Confirmations older than the latest two completed 5M candles are rejected as stale. Pullback entry is disabled by default.
 
 ### Gate F — Invalidation, target and reward-to-risk
-- BUY stop: lowest low from the sweep through confirmation.
-- SELL stop: highest high from the sweep through confirmation.
-- Target: nearest detected 15M swing reference in the trade direction beyond entry.
+- BUY stop: the swept low, extended to any lower low made before confirmation.
+- SELL stop: the swept high, extended to any higher high made before confirmation.
+- Targets are selected from significant reaction/liquidity areas on both 5M and 15M, nearest eligible area first in the trade direction.
 - Risk and reward must both be positive.
-- Planned reward-to-risk must be at least 3.0; otherwise return **NO_TRADE**.
-- This is a planned ratio before spread, slippage, execution delay and other costs. The actual ratio can be worse.
+- Planned reward-to-risk must be at least 3.0 after the configured assumed spread; otherwise return **NO_TRADE**.
+- Assumed spread does not account for all slippage, execution delay or market impact. Actual results can be worse.
 - If no valid target reference is found, do not invent one; return **NO_TRADE**.
 
 ## 4. Candidate alert contents
@@ -279,3 +282,12 @@ candle's low only. Fixes:
 - SL remains anchored beyond the swept extreme, extended if price makes a more extreme high/low before confirmation.
 - Added unit tests for nearest-target selection, direction checks, and significant-area filtering.
 - This change corrects target-selection logic; it does not establish profitability. The full test suite and historical replay must pass before live reliance.
+
+
+## Update 2026-10-28 — stricter counter-bias confirmation
+
+- When a proposed trade opposes clear 15M dominance, two bearish/bullish candles alone are no longer enough.
+- Counter-bias entries require three consecutive completed 5M candles in the proposed direction, close-to-close progress, each candle body at least 20% of its range, average body/range at least 45%, and a final close beyond the sweep candle's opposite boundary.
+- If no qualifying sequence appears, the setup is rejected as **NO_TRADE**. The scan continues past weaker pairs to find a later qualifying three-candle sequence.
+- Added unit tests for a valid strong counter-bias sequence, failure to break the sweep boundary, and weak candle bodies.
+- These are provisional filters to be evaluated in replay; they are not evidence of profitability.

@@ -53,6 +53,9 @@ def run_replay(
     seen: set[int] = set()
     last_analysis: dict[str, Any] | None = None
     near_misses: dict[int, dict[str, Any]] = {}
+    first_m1 = min((int(c["epoch"]) for c in (m1 or [])), default=None)
+    skipped_no_1m = 0
+    evaluated = 0
 
     if len(m5) <= warmup + 1:
         return {
@@ -65,6 +68,10 @@ def run_replay(
 
     for idx in range(warmup, len(m5) - 1):
         now_epoch = int(m5[idx]["epoch"]) + 300  # this 5M candle just closed
+        if first_m1 is not None and int(m5[idx]["epoch"]) < first_m1 + 600:
+            skipped_no_1m += 1  # 1M history does not reach this far back: cannot judge fairly
+            continue
+        evaluated += 1
         view5 = [c for c in m5[: idx + 2] if int(c["epoch"]) <= now_epoch]
         view15 = [c for c in m15 if int(c["epoch"]) <= now_epoch]
         view1 = [c for c in (m1 or []) if int(c["epoch"]) <= now_epoch] or None
@@ -143,7 +150,8 @@ def run_replay(
                 "net_r": round(sum(m["if_taken_r"] for m in near_misses.values() if m.get("if_taken_r") is not None), 2),
             },
         },
-        "bars_evaluated": max(0, len(m5) - warmup - 1),
+        "bars_evaluated": evaluated if first_m1 is not None else max(0, len(m5) - warmup - 1),
+        "bars_skipped_no_1m": skipped_no_1m,
         "m15_count": len(m15),
         "m5_count": len(m5),
         "tally": dict(tally.most_common()),
@@ -212,4 +220,43 @@ def format_replay_report(result: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("Note: experimental rules; no costs/slippage. Not financial advice.")
+    return "\n".join(lines)
+
+
+RR_BUCKETS = [(0.0, 1.0, "<1"), (1.0, 1.5, "1-1.5"), (1.5, 2.0, "1.5-2"), (2.0, 3.0, "2-3"), (3.0, 1e9, "3+")]
+
+
+def rr_study(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group simulated market-entry outcomes by planned R:R (run the replay with min_rr ~0 first).
+
+    Win rate = targets / (targets + stops). Net R uses each trade's own planned R:R for wins and -1 for stops.
+    """
+    rows = []
+    for lo, hi, label in RR_BUCKETS:
+        group = [c for c in candidates if lo <= float(c["rr"]) < hi]
+        wins = sum(1 for c in group if c["outcome"] == "target")
+        losses = sum(1 for c in group if str(c["outcome"]).startswith("stop"))
+        open_ = sum(1 for c in group if c["outcome"] == "open")
+        resolved = wins + losses
+        net = sum(c["r"] for c in group if c.get("r") is not None)
+        rows.append({
+            "bucket": label, "setups": len(group), "targets": wins, "stops": losses, "open": open_,
+            "win_rate": round(wins / resolved, 2) if resolved else None,
+            "net_r": round(net, 2),
+            "expectancy_r": round(net / resolved, 2) if resolved else None,
+        })
+    return rows
+
+
+def format_rr_study(symbol: str, rows: list[dict[str, Any]], bars: int) -> str:
+    total = sum(r["setups"] for r in rows)
+    lines = [f"R:R study - {symbol} ({bars} bars, {total} setups that passed every candle rule; outcomes at market entry)", ""]
+    lines.append("R:R bucket | setups | win/loss | win% | net R | per trade")
+    for r in rows:
+        wr = f"{int(r['win_rate'] * 100)}%" if r["win_rate"] is not None else "-"
+        ex = f"{r['expectancy_r']:+.2f}R" if r["expectancy_r"] is not None else "-"
+        lines.append(f"  {r['bucket']:>6} | {r['setups']:>3} | {r['targets']}/{r['stops']} | {wr:>4} | {r['net_r']:+.1f} | {ex}")
+    lines += ["", "Read: a bucket with positive 'per trade' and enough setups (30+) is worth allowing.",
+              "Small samples lie: do not change the minimum R:R from fewer than ~30 setups per bucket.",
+              "No costs/slippage. Experimental, not financial advice."]
     return "\n".join(lines)

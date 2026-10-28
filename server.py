@@ -61,7 +61,19 @@ async def root(request: Request):
 
 @mcp.custom_route("/health", methods=["GET", "HEAD"])
 async def health(request: Request):
-    return PlainTextResponse("ok")
+    """Always 200 (keeps the free instance awake). Body shows whether the monitor loop is alive."""
+    import time as _t
+    from starlette.responses import JSONResponse
+    info: dict = {"ok": True}
+    try:
+        import monitor_worker
+        last = monitor_worker.STATUS.get("last_cycle_at")
+        info["monitor_running"] = monitor_worker.STATUS.get("started_at") is not None
+        info["monitor_last_cycle_age_s"] = (int(_t.time()) - last) if last else None
+        info["cycles"] = monitor_worker.STATUS.get("cycles")
+    except Exception:
+        info["monitor_running"] = False
+    return JSONResponse(info)
 
 
 # ====================== WebSocket Helper ======================
@@ -412,12 +424,13 @@ async def replay(symbol: str = "cryBTCUSD", candles_5m: int = 400, target_mode: 
     api = DerivMarketData()
     m15 = await api.candles(symbol, "15m", min(500, n5 // 3 + 60))
     m5 = await api.candles(symbol, "5m", n5)
+    m1 = await api.candles(symbol, "1m", min(2500, n5 * 5 + 30))
     opts: dict = {"pullback": bool(pullback), "min_rr": float(min_rr)}
     if target_mode:
         opts["target_mode"] = target_mode
     if no_spread:
         opts["spread"] = 0.0
-    return run_replay(symbol, m15, m5, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
+    return run_replay(symbol, m15, m5, m1=m1, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
 
 
 def _start_monitor_thread() -> None:

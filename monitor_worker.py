@@ -15,6 +15,7 @@ from typing import Any
 
 from monitoring.config import Settings
 from monitoring.market_data import DerivMarketData, GRANULARITIES
+from monitoring.ledger import Ledger, make_store
 from monitoring.strategy import analyze_setup
 from monitoring.telegram import format_candidate, send_telegram
 from monitoring.telegram_commands import command_loop
@@ -84,6 +85,9 @@ async def run() -> None:
 
     STATUS.update(started_at=int(time.time()), alerts_enabled=settings.alerts_enabled,
                   telegram_enabled=settings.telegram_enabled)
+    ledger = Ledger(make_store())
+    await ledger.load()
+    STATUS["ledger"] = ledger.summary()
     api = DerivMarketData(settings.deriv_app_id)
     state = load_state(settings.state_path)
     state.setdefault("sent", {})
@@ -164,9 +168,14 @@ async def run() -> None:
                     continue
                 stats["scanned"] += 1
 
+                # Score any open alerts for this symbol against the latest real candles
+                if await ledger.update(symbol, data.get("1m") or data["5m"]):
+                    STATUS["ledger"] = ledger.summary()
                 analysis = analyze_setup(symbol, data["15m"], data["5m"], data.get("1m") or None, None)
                 record_analysis(symbol, analysis)
                 candidate = analysis.candidate
+                if candidate is not None and await ledger.record(candidate):
+                    STATUS["ledger"] = ledger.summary()
                 if candidate is None:
                     logger.info("%s: no complete candidate", symbol)
                     continue

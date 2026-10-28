@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from monitoring.replay_engine import _simulate, run_replay
 from monitoring.strategy import _plan_entry, _reaction_areas, analyze_setup
+from tests.synth import extend_5m, with_1m
 from tests.test_engine_positive_path import _mk, build
 
 
@@ -56,10 +57,10 @@ class ReactionAreaTests(unittest.TestCase):
 class OptsAndReplayTests(unittest.TestCase):
     def test_opts_can_loosen_rr(self):
         m15, m5 = build()
-        strict = analyze_setup("TEST", m15, m5, {"min_rr": 50.0})
+        strict = analyze_setup("TEST", m15, m5, with_1m(m5), {"min_rr": 50.0})
         self.assertEqual(strict.stage, "risk_reward")
         self.assertIn("rr_market", strict.details)
-        self.assertEqual(analyze_setup("TEST", m15, m5).status, "CANDIDATE")
+        self.assertEqual(analyze_setup("TEST", m15, m5, with_1m(m5)).status, "CANDIDATE")
 
     def test_simulate_handles_retest_fill_and_cancel(self):
         c = SimpleNamespace(side="BUY", entry=100.0, stop_loss=99.0, take_profit=103.0,
@@ -71,10 +72,11 @@ class OptsAndReplayTests(unittest.TestCase):
 
     def test_replay_reports_near_misses_and_summary(self):
         m15, m5 = build()
-        result = run_replay("TEST", m15, m5, warmup=20, opts={"min_rr": 50.0})
+        m5x = extend_5m(m5)
+        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0})
         self.assertGreater(result["near_misses"]["setups_that_failed_rr_or_target"], 0)
         self.assertEqual(result["summary"]["targets"], 0)
-        ok = run_replay("TEST", m15, m5, warmup=20)
+        ok = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20)
         self.assertEqual(len(ok["candidates"]), 1)
 
 
@@ -87,14 +89,40 @@ class NoPullbackByDefaultTests(unittest.TestCase):
         import monitoring.strategy as strat
         self.assertFalse(strat.PULLBACK_ENABLED)
         m15, m5 = build()
-        result = analyze_setup("TEST", m15, m5)
+        result = analyze_setup("TEST", m15, m5, with_1m(m5))
         if result.candidate:
             self.assertNotEqual(result.candidate.entry_style, "pullback_limit")
 
     def test_replay_counts_one_near_miss_per_sweep_and_reports_what_if_taken(self):
         m15, m5 = build()
-        result = run_replay("TEST", m15, m5, warmup=20, opts={"min_rr": 50.0})
+        m5x = extend_5m(m5)
+        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0})
         nm = result["near_misses"]
         self.assertEqual(nm["setups_that_failed_rr_or_target"], 1)   # same sweep seen on several bars = one setup
         self.assertIn("if_taken_at_market", nm)
         self.assertEqual(sum(nm["if_taken_at_market"][k] for k in ("targets", "stops", "open")) <= 1, True)
+
+
+class StudyAndCoverageTests(unittest.TestCase):
+    def test_rr_study_buckets_wins_losses_and_expectancy(self):
+        from monitoring.replay_engine import format_rr_study, rr_study
+        cands = [
+            {"rr": 0.5, "outcome": "target", "r": 0.5}, {"rr": 0.6, "outcome": "stop", "r": -1.0},
+            {"rr": 1.2, "outcome": "target", "r": 1.2}, {"rr": 1.3, "outcome": "target", "r": 1.3},
+            {"rr": 3.4, "outcome": "stop", "r": -1.0}, {"rr": 3.5, "outcome": "open", "r": None},
+        ]
+        rows = {r["bucket"]: r for r in rr_study(cands)}
+        self.assertEqual(rows["<1"]["setups"], 2)
+        self.assertEqual((rows["1-1.5"]["targets"], rows["1-1.5"]["stops"]), (2, 0))
+        self.assertAlmostEqual(rows["1-1.5"]["expectancy_r"], 1.25)
+        self.assertEqual(rows["3+"]["open"], 1)
+        self.assertIn("per trade", format_rr_study("TEST", rr_study(cands), 100))
+
+    def test_replay_skips_bars_without_1m_history_instead_of_calling_them_no_trade(self):
+        m15, m5 = build()
+        m5x = extend_5m(m5)
+        m1 = with_1m(m5x)
+        short_m1 = [c for c in m1 if c["epoch"] >= m5x[10]["epoch"]]   # 1M only covers the later part
+        result = run_replay("TEST", m15, m5x, m1=short_m1, warmup=5)
+        self.assertGreater(result["bars_skipped_no_1m"], 0)
+        self.assertEqual(result["bars_evaluated"] + result["bars_skipped_no_1m"], len(m5x) - 5 - 1)

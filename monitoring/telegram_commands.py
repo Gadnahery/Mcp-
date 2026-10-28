@@ -50,7 +50,9 @@ Commands:
   e.g. /replay btc  /replay v75  /replay v25
   Optional count: /replay btc 200  (5M candles, 80-400)
   Variants: nearest nopb nospread rr2  (e.g. /replay btc 400 nearest rr2)
+  Study: /replay r25 400 study  (win rate by R:R bucket)
 /candidates — recent live trade candidates
+/stats — alert scorecard (wins, stops, net R, auto-scored)
 /symbols — list monitored symbols
 /help — this message
 
@@ -213,6 +215,10 @@ def handle_command(
         return HELP_TEXT.replace("*", "")
     if cmd == "/status":
         return format_status(status)
+    if cmd == "/stats":
+        from .ledger import format_stats
+        return format_stats(status.get("ledger"))
+
     if cmd == "/candidates":
         return format_candidates(status)
     if cmd == "/symbols":
@@ -270,6 +276,7 @@ async def run_replay_command(text: str) -> str:
         return f"Unknown symbol '{parts[1]}'. Try: gold, eur, gbp, btc"
 
     count = 180
+    study = False
     opts: dict[str, Any] = {}
     for tok in parts[2:]:
         t = tok.lower()
@@ -281,10 +288,12 @@ async def run_replay_command(text: str) -> str:
             opts["pullback"] = False
         elif t == "nospread":
             opts["spread"] = 0.0
+        elif t == "study":
+            study = True
         elif t.startswith("rr") and t[2:].replace(".", "", 1).isdigit():
             opts["min_rr"] = float(t[2:])
         else:
-            return "Options: <count 80-400> nearest nopb nospread rr2 (e.g. /replay btc 400 nearest rr2)"
+            return "Options: <count 80-400> study nearest nopb nospread rr2 (e.g. /replay btc 400 study)"
     count = max(80, min(400, count))
 
     try:
@@ -292,13 +301,19 @@ async def run_replay_command(text: str) -> str:
         from .replay_engine import format_replay_report, run_replay
 
         api = DerivMarketData()
-        m15 = await api.candles(symbol, "15m", max(60, count // 3))
+        m15 = await api.candles(symbol, "15m", min(500, count // 3 + 60))
         m5 = await api.candles(symbol, "5m", count)
         try:
-            m1 = await api.candles(symbol, "1m", min(300, count * 2))
+            # 1M must cover the whole 5M window (5 x the 5M count), otherwise early bars cannot be judged
+            m1 = await api.candles(symbol, "1m", min(2500, count * 5 + 30))
         except Exception:
             m1 = []
-        result = run_replay(symbol, m15, m5, m1=m1, warmup=min(60, max(20, len(m5) // 4)), opts=opts)
+        warmup = min(60, max(20, len(m5) // 4))
+        if study:
+            from .replay_engine import format_rr_study, rr_study
+            result = run_replay(symbol, m15, m5, m1=m1, warmup=warmup, opts={**opts, "min_rr": 0.01, "pullback": False})
+            return format_rr_study(symbol, rr_study(result.get("candidates") or []), result.get("bars_evaluated", 0))
+        result = run_replay(symbol, m15, m5, m1=m1, warmup=warmup, opts=opts)
         return format_replay_report(result)
     except Exception as exc:
         logger.exception("Replay failed for %s", symbol)

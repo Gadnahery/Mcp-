@@ -257,3 +257,14 @@ candle's low only. Fixes:
 - Entry and planned R:R are calculated using the final 1M confirmation close. The 1M confirmation must be fresh; the engine will not fall back to a 5M-only entry if 1M data is missing.
 - This can reduce late entries or change R:R, but it can also reject setups that never confirm on 1M. It is not evidence of profitability until historical replay and tests pass.
 - Setups rejected by the 1:3 R:R gate may later reach their target; that does not make the original entry valid at 1:3. The replay report should continue tracking these separately, with realistic spread/slippage and actual entry timing.
+
+## Update 2026-10-28 — 1M replay coverage, R:R study, alert scorecard
+
+- **Bug:** `/replay` fetched <=300 1M candles (~5h) against up to 400 5M candles (~33h). Bars with no 1M history
+  were judged `data_quality` NO_TRADE, so replays showed few/no trades. Replay now fetches 1M for the whole 5M window and
+  *skips* bars that 1M cannot cover instead of scoring them as failures (`bars_skipped_no_1m`).
+- **R:R study:** `/replay SYMBOL N study` buckets simulated market-entry outcomes by planned R:R.
+- **Automatic scorecard:** every candidate is recorded in a ledger and scored from real 1M candles (target / stop /
+  expired). `/stats` shows win rate and net R per pair. Optional Supabase storage survives restarts.
+- **/health** reports monitor liveness; GitHub Actions pinger added (see docs/DEPLOY_AND_TELEGRAM.md section 4).
+- 1M confirmation makes entries later than a 5M-only entry, so R:R is naturally lower: check the study before judging.

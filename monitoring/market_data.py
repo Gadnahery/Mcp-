@@ -46,7 +46,7 @@ class DerivMarketData:
         payload = {
             "ticks_history": symbol,
             "end": "latest",
-            "count": min(max(int(count), 60), 500),
+            "count": min(max(int(count), 60), 3000),
             "style": "candles",
             "granularity": GRANULARITIES[timeframe],
         }

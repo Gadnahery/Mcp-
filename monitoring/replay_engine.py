@@ -124,7 +124,7 @@ def run_replay(
                 if det.get("entry") is not None and det.get("stop") is not None and det.get("target") is not None:
                     pseudo = SimpleNamespace(side=result.side, entry=det["entry"], stop_loss=det["stop"],
                                              take_profit=det["target"], risk_reward=det.get("rr_market") or 0.0,
-                                             entry_style="market")
+                                             entry_style="market", assumed_spread=det.get("spread", 0.0))
                     signal_epoch = int(det.get("confirm_epoch", 0)) + 300
                     future_1m = [bar for bar in (m1 or []) if int(bar["epoch"]) >= signal_epoch]
                     out, r_ = _simulate(pseudo, future_1m if future_1m else m5[idx + 1:])

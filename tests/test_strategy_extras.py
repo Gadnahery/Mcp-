@@ -139,7 +139,7 @@ class OptsAndReplayTests(unittest.TestCase):
         result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"min_rr": 50.0, "spread": 0.0})
         self.assertGreater(result["near_misses"]["setups_that_failed_rr_or_target"], 0)
         self.assertEqual(result["summary"]["targets"], 0)
-        ok = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20)
+        ok = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"spread": 0.0})
         self.assertEqual(len(ok["candidates"]), 1)
 
 

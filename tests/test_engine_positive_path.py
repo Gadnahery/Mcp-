@@ -118,13 +118,14 @@ class TwoCloseConfirmationTests(unittest.TestCase):
     """Rule (user, Oct 26): two consecutive directional body closes with close-to-close progress."""
 
     def test_two_bullish_body_closes_after_a_sweep_are_a_candidate(self):
-        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2)])
+        # Keep the confirmation close below the nearer target so the closest target still clears 1:3.
+        m15, m5 = _impulse([(100.4, 101.0), (101.0, 101.7)])
         result = analyze_setup("TEST", m15, m5, with_1m(m5))
         self.assertEqual(result.status, "CANDIDATE", (result.stage, result.missing))
         self.assertEqual(result.candidate.side, "BUY")
 
     def test_three_closes_still_work(self):
-        m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2), (102.2, 103.1)])
+        m15, m5 = _impulse([(100.4, 100.9), (100.9, 101.5), (101.5, 102.0)])
         self.assertEqual(analyze_setup("TEST", m15, m5, with_1m(m5)).status, "CANDIDATE")
 
     def test_a_bearish_candle_breaks_the_pair(self):

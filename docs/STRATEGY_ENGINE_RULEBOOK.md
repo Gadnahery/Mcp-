@@ -58,8 +58,8 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 ### Gate E — Post-sweep reaction and control confirmation
 - Require enough completed 5M candles after the sweep to assess the response.
 - A sweep alone, a zone touch, or a wick is not an entry.
-- With no clear opposing 15M bias, two consecutive completed 5M directional-body closes with close-to-close progress may confirm control; a third matching close is stronger.
-- **Counter-bias gate:** when a SELL opposes bullish 15M structural/close-progress context or a BUY opposes bearish context, require three consecutive directional 5M closes with close-to-close progress, no body/range below 0.20, average body/range of at least 0.45, and the final close beyond the sweep candle's opposite boundary (SELL below its low; BUY above its high). If any condition fails, return **NO_TRADE**.
+- With no clear opposing 15M context, two consecutive completed 5M directional-body closes with close-to-close progress may confirm control only when each body is at least 20% of its range, each close sits in the directional outer 35% of the range (BUY upper 35%, SELL lower 35%), and average body/range is at least 0.40. A third matching candle can confirm instead if the full three-candle sequence passes the same quality checks.
+- **Counter-bias gate:** when a SELL opposes bullish 15M structural/close-progress context or a BUY opposes bearish context, require three consecutive directional 5M closes with close-to-close progress, no body/range below 0.20, each close in the directional outer 35% of its range, average body/range of at least 0.45, and the final close beyond the sweep candle's opposite boundary (SELL below its low; BUY above its high). If any condition fails, return **NO_TRADE**.
 - The engine scans for a qualifying three-candle sequence rather than accepting an earlier weak pair and ignoring a later stronger sequence.
 - These body-strength thresholds are provisional research settings and must be reviewed against annotated historical replay.
 - Signal entry reference remains the final 5M confirmation close; replay and the shadow ledger use the first post-signal 1M candle open as an executable-fill estimate when available. Live execution is not enabled.
@@ -321,3 +321,8 @@ The following implementation gaps identified in the research review have now bee
 ## Fresh-entry timing safeguard — 2026-10-28
 
 The live engine now rejects a confirmation unless it belongs to the latest completed 5M candle. The shadow ledger separates the signal close from the next full minute after the alert, checks intervening bars for target/stop touches before fill, and uses the first eligible 1M open to estimate fill. Replay evaluates each bar chronologically and uses the first post-signal 1M open where available.
+
+
+## Candle confirmation quality — 2026-10-28
+
+Normal confirmation now checks not just candle direction and close-to-close progress, but also body/range and closing location: each candle must have a body at least 20% of its range, close in the directional outer 35% of the range, and the sequence mean body/range must be at least 0.40. A qualifying third candle may strengthen/extend the sequence; if it is weak, a valid two-candle sequence can still be used. Counter-bias trades retain the stricter three-candle, 0.45 mean-body threshold. These are experimental measurements of price progress, not direct proof of order flow or absorption.

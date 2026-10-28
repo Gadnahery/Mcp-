@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from monitoring.replay_engine import _simulate, run_replay
-from monitoring.strategy import _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, analyze_setup
+from monitoring.strategy import _latest_unambiguous_sweep, _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, analyze_setup
 from tests.synth import extend_5m, with_1m
 from tests.test_engine_positive_path import _mk, build
 
@@ -52,6 +52,34 @@ class ReactionAreaTests(unittest.TestCase):
         by_level = {round(a["level"], 1): a for a in highs}
         self.assertFalse(by_level[12.0]["significant"])
         self.assertTrue(by_level[20.0]["significant"])
+
+
+class SweepAmbiguityTests(unittest.TestCase):
+    def test_same_candle_sweeping_both_sides_is_ambiguous(self):
+        candle = {"epoch": 10, "open": 100, "high": 105, "low": 95, "close": 100}
+        possible = [(10, "BUY", candle, 96.0), (10, "SELL", candle, 104.0)]
+        selected, issue = _latest_unambiguous_sweep(possible)
+        self.assertIsNone(selected)
+        self.assertEqual(issue, "ambiguous_double_sweep")
+
+    def test_latest_unambiguous_sweep_wins(self):
+        older = {"epoch": 5, "open": 100, "high": 101, "low": 98, "close": 100}
+        latest = {"epoch": 10, "open": 100, "high": 102, "low": 97, "close": 101}
+        selected, issue = _latest_unambiguous_sweep([
+            (5, "SELL", older, 100.5), (10, "BUY", latest, 98.0)
+        ])
+        self.assertIsNone(issue)
+        self.assertEqual(selected[0], 10)
+        self.assertEqual(selected[1], "BUY")
+
+
+class CostModelTests(unittest.TestCase):
+    def test_unknown_symbol_cannot_silently_use_zero_spread(self):
+        m15, m5 = build()
+        result = analyze_setup("UNCONFIGURED", m15, m5, with_1m(m5), {"spread": None})
+        self.assertEqual(result.status, "NO_TRADE")
+        self.assertEqual(result.stage, "cost_model")
+        self.assertIn("No assumed spread configured", result.missing[0])
 
 
 class CounterBiasConfirmationTests(unittest.TestCase):

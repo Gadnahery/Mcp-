@@ -228,6 +228,19 @@ def _swing_points(candles: list[dict[str, Any]], wing: int = 2) -> tuple[list[tu
     return highs, lows
 
 
+def _latest_unambiguous_sweep(
+    possible: list[tuple[int, Side, dict[str, Any], float]],
+) -> tuple[tuple[int, Side, dict[str, Any], float] | None, str | None]:
+    """Select the latest sweep, refusing a same-candle two-sided sweep."""
+    if not possible:
+        return None, None
+    latest_idx = max(item[0] for item in possible)
+    latest = [item for item in possible if item[0] == latest_idx]
+    if len({item[1] for item in latest}) > 1:
+        return None, "ambiguous_double_sweep"
+    return max(latest, key=lambda item: item[0]), None
+
+
 def _reaction_areas(candles: list[dict[str, Any]], tolerance: float, median_range: float):
     """Rank 15M swings by how much price actually reacted from them (significant vs minor)."""
     highs, lows = _swing_points(candles)
@@ -445,19 +458,15 @@ def analyze_setup(
             possible.append((i, "BUY", candle, max(swept_lows)))
         if swept_highs:
             possible.append((i, "SELL", candle, min(swept_highs)))
-    if possible:
-        # If the latest candle swept/reclaimed both sides, OHLC cannot reveal which
-        # happened first. Do not let append order invent a directional sequence.
-        latest_idx = max(item[0] for item in possible)
-        latest_sides = {item[1] for item in possible if item[0] == latest_idx}
-        if len(latest_sides) > 1:
-            return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (
-                "Ambiguous double-sided sweep in the same 5M candle; OHLC cannot establish which boundary was taken first",
-            ))
-        # Prefer the latest unambiguous sweep.
-        _, side, sweep, swept_level = max((item for item in possible if item[1] in latest_sides), key=lambda item: item[0])
+    selected_sweep, sweep_issue = _latest_unambiguous_sweep(possible)
+    if sweep_issue == "ambiguous_double_sweep":
+        return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (
+            "Ambiguous double-sided sweep in the same 5M candle; OHLC cannot establish which boundary was taken first",
+        ))
+    if selected_sweep is not None:
+        _, side, sweep, swept_level = selected_sweep
         if context_bias and ((context_bias == "bullish" and side == "SELL") or (context_bias == "bearish" and side == "BUY")):
-            evidence.append(f"{side} sweep runs against current dominant close-to-close bias; require especially clear confirmation")
+            evidence.append(f"{side} sweep runs against current 15M context; require especially clear confirmation")
 
     if side is None or sweep is None or swept_level is None:
         return Analysis(symbol, "NO_TRADE", None, "location_or_sweep", tuple(evidence), (

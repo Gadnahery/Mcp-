@@ -63,7 +63,7 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 - The engine scans for a qualifying three-candle sequence rather than accepting an earlier weak pair and ignoring a later stronger sequence.
 - These body-strength thresholds are provisional research settings and must be reviewed against annotated historical replay.
 - Signal entry reference remains the final 5M confirmation close; replay and the shadow ledger use the first post-signal 1M candle open as an executable-fill estimate when available. Live execution is not enabled.
-- Confirmations older than the latest two completed 5M candles are rejected as stale. Pullback entry is disabled by default.
+- Only a confirmation on the latest completed 5M candle is eligible; any older confirmation is rejected as stale before it can be presented as an executable entry. Pullback entry is disabled by default.
 
 ### Gate F — Invalidation, target and reward-to-risk
 - BUY stop: the swept low, extended to any lower low made before confirmation.
@@ -316,3 +316,8 @@ The following implementation gaps identified in the research review have now bee
 - The 20% single-candle and 45% mean-body thresholds, two-swing structural proxy, swing wings, reaction-size thresholds and sweep-depth thresholds remain hypotheses. They must be compared against annotated examples and tested out of sample.
 - Current cost modelling is a configured spread assumption; it does not yet model variable spread at every candle, commissions, financing, latency or real order fills.
 - The monitor remains candidate/scorecard only. Keep strategy alerts off until market-specific replay and paper-monitoring results are reviewed.
+
+
+## Fresh-entry timing safeguard — 2026-10-28
+
+The live engine now rejects a confirmation unless it belongs to the latest completed 5M candle. This avoids presenting a historical confirming close as a fresh entry when price has already moved since that close. Replay still evaluates each bar chronologically; shadow outcome scoring starts at the first subsequent 1M candle open when available.

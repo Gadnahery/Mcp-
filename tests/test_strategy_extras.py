@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from monitoring.replay_engine import _simulate, run_replay
-from monitoring.strategy import _plan_entry, _reaction_areas, _select_target_area, analyze_setup
+from monitoring.strategy import _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, analyze_setup
 from tests.synth import extend_5m, with_1m
 from tests.test_engine_positive_path import _mk, build
 
@@ -52,6 +52,39 @@ class ReactionAreaTests(unittest.TestCase):
         by_level = {round(a["level"], 1): a for a in highs}
         self.assertFalse(by_level[12.0]["significant"])
         self.assertTrue(by_level[20.0]["significant"])
+
+
+class CounterBiasConfirmationTests(unittest.TestCase):
+    def test_sell_counter_bias_needs_three_strong_closes_beyond_sweep_low(self):
+        sweep = {"low": 100.0, "high": 104.0}
+        strong = [
+            {"open": 102.0, "high": 102.2, "low": 100.8, "close": 101.0},
+            {"open": 101.0, "high": 101.2, "low": 99.8, "close": 100.0},
+            {"open": 100.0, "high": 100.2, "low": 98.8, "close": 99.0},
+        ]
+        ok, reason = _strong_counter_bias_confirmation("SELL", sweep, strong)
+        self.assertTrue(ok, reason)
+
+    def test_counter_bias_rejected_if_final_close_does_not_break_sweep_boundary(self):
+        sweep = {"low": 100.0, "high": 104.0}
+        candles = [
+            {"open": 103.0, "high": 103.2, "low": 102.0, "close": 102.2},
+            {"open": 102.2, "high": 102.4, "low": 101.0, "close": 101.2},
+            {"open": 101.2, "high": 101.4, "low": 100.2, "close": 100.4},
+        ]
+        ok, reason = _strong_counter_bias_confirmation("SELL", sweep, candles)
+        self.assertFalse(ok)
+        self.assertIn("sweep-candle low", reason)
+
+    def test_counter_bias_rejected_for_weak_or_nonprogressing_candles(self):
+        sweep = {"low": 100.0, "high": 104.0}
+        weak = [
+            {"open": 103.0, "high": 104.0, "low": 102.0, "close": 102.9},
+            {"open": 102.9, "high": 103.0, "low": 101.0, "close": 101.1},
+            {"open": 101.1, "high": 101.2, "low": 99.0, "close": 99.1},
+        ]
+        ok, _ = _strong_counter_bias_confirmation("SELL", sweep, weak)
+        self.assertFalse(ok)
 
 
 class TargetSelectionTests(unittest.TestCase):

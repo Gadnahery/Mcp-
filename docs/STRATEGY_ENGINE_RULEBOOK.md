@@ -2,7 +2,7 @@
 
 **Status:** research implementation; not approved for live trading  
 **Engine:** Deriv MCP strategy monitor  
-**Timeframes:** 15-minute context + 5-minute sweep/control and execution (1-minute execution is currently disabled)  
+**Timeframes:** 15-minute structure/context + 5-minute sweep/control and execution; 1-minute candles resolve shadow-trade outcomes, not entries  
 **Execution:** alerts only; no order placement
 
 ## 1. Purpose and operating principle
@@ -21,7 +21,7 @@ The strategy's working ideas are:
 
 | Timeframe | Role | Engine use |
 |---|---|---|
-| 15M | Context, meaningful swing references, reaction areas | Detect provisional swing highs/lows and broad close-to-close dominance |
+| 15M | Context, meaningful swing references, reaction areas | Detect provisional swing highs/lows, structural progression and close-to-close dominance fallback |
 | 5M | Approach, sweep/reclaim, post-sweep response, confirmation and entry | Evaluate the sequence and calculate entry, stop, target and planned R:R |
 
 The 1H timeframe is intentionally not used in the current replay configuration. The 1M execution layer is currently disabled; entries use the completed 5M confirmation close. This must be kept explicit in replay output and documentation.
@@ -37,16 +37,17 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 - If data is missing or unusable, return **NO_TRADE**.
 
 ### Gate B — 15M context and reference levels
-- Estimate dominance from three consecutive close-to-close advances or declines.
-- If the three changes are not all strictly positive or all strictly negative, context is mixed/unclear.
+- First infer provisional structure from the latest two confirmed swing highs and lows: both higher means bullish structure; both lower means bearish structure; disagreement is mixed.
+- Also measure three consecutive close-to-close advances or declines. This is a short-term progress observation, not a substitute for swing structure.
+- If structure is unclear, use close-to-close progress as fallback context; if both are unclear, context remains mixed.
 - Detect local swing highs/lows using a two-candle wing on either side. This is a **provisional coding proxy**, not a fully specified user-confirmed swing rule.
 - Reaction-area tolerance is currently 15% of the median range of the last 20 completed 15M candles. This threshold is provisional and requires annotated-chart validation.
 
 ### Gate C — 5M approach/conflict
 - Record 5M close-to-close dominance when present.
-- Reject for continuing opposition only when **both** timeframes have clear dominance and 5M is still clearly advancing against the 15M direction.
+- Record when 5M progress conflicts with the 15M structural context, but do not automatically reject the setup before examining its sweep and post-sweep response.
 - Unclear 15M context must not be treated as an opposing direction.
-- A contrary-direction sweep may still be considered, but must pass the same strong confirmation and risk gates.
+- A counter-bias setup must pass the stricter three-candle confirmation gate; an unambiguous continuation may use the normal confirmation gate.
 
 ### Gate D — Sweep and reclaim
 - BUY candidate context: price trades below a detected 15M swing low and the same 5M candle closes back above that reference.
@@ -58,10 +59,10 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 - Require enough completed 5M candles after the sweep to assess the response.
 - A sweep alone, a zone touch, or a wick is not an entry.
 - With no clear opposing 15M bias, two consecutive completed 5M directional-body closes with close-to-close progress may confirm control; a third matching close is stronger.
-- **Counter-bias gate:** when a SELL opposes bullish 15M dominance or a BUY opposes bearish 15M dominance, require three consecutive directional 5M closes with close-to-close progress, no doji-like body, average body/range of at least 0.45, and the final close beyond the sweep candle's opposite boundary (SELL below its low; BUY above its high). If any condition fails, return **NO_TRADE**.
+- **Counter-bias gate:** when a SELL opposes bullish 15M structural/close-progress context or a BUY opposes bearish context, require three consecutive directional 5M closes with close-to-close progress, no body/range below 0.20, average body/range of at least 0.45, and the final close beyond the sweep candle's opposite boundary (SELL below its low; BUY above its high). If any condition fails, return **NO_TRADE**.
 - The engine scans for a qualifying three-candle sequence rather than accepting an earlier weak pair and ignoring a later stronger sequence.
 - These body-strength thresholds are provisional research settings and must be reviewed against annotated historical replay.
-- The current 1M execution layer is disabled. Entry and R:R use the final 5M confirmation close.
+- Signal entry reference remains the final 5M confirmation close; replay and the shadow ledger use the first post-signal 1M candle open as an executable-fill estimate when available. Live execution is not enabled.
 - Confirmations older than the latest two completed 5M candles are rejected as stale. Pullback entry is disabled by default.
 
 ### Gate F — Invalidation, target and reward-to-risk
@@ -70,7 +71,8 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 - Targets are selected from significant reaction/liquidity areas on both 5M and 15M, nearest eligible area first in the trade direction.
 - Risk and reward must both be positive.
 - Planned reward-to-risk must be at least 3.0 after the configured assumed spread; otherwise return **NO_TRADE**.
-- Assumed spread does not account for all slippage, execution delay or market impact. Actual results can be worse.
+- If a symbol has no explicit spread assumption, return **NO_TRADE** at the cost-model gate. Never silently substitute zero spread for an unknown symbol.
+- The spread defaults are provisional for only the configured symbols. Populate and periodically check ASSUMED_SPREADS for each symbol from actual trading conditions; assumed spread does not account for all slippage, execution delay or market impact.
 - If no valid target reference is found, do not invent one; return **NO_TRADE**.
 
 ## 4. Candidate alert contents
@@ -291,3 +293,25 @@ candle's low only. Fixes:
 - If no qualifying sequence appears, the setup is rejected as **NO_TRADE**. The scan continues past weaker pairs to find a later qualifying three-candle sequence.
 - Added unit tests for a valid strong counter-bias sequence, failure to break the sweep boundary, and weak candle bodies.
 - These are provisional filters to be evaluated in replay; they are not evidence of profitability.
+
+
+## Implementation audit — 2026-10-28
+
+The following implementation gaps identified in the research review have now been addressed in code:
+
+- **Conflicting context gate:** 5M-vs-15M disagreement is recorded as evidence instead of prematurely rejecting before sweep and confirmation analysis. Counter-bias confirmation now keys off structural bias when available, with close-to-close dominance as fallback.
+- **Structure context:** the engine now attempts to classify bullish/bearish structure from confirmed swing progression (both swing highs and lows must progress in the same direction). This remains a heuristic and can return mixed.
+- **Ambiguous double sweeps:** when the same latest 5M candle sweeps and reclaims both sides, the engine returns **NO_TRADE** because OHLC cannot reveal the order of events.
+- **Unknown costs:** missing symbol spread no longer silently becomes zero. A symbol must have an explicit spread value via defaults or the ASSUMED_SPREADS environment variable; otherwise the cost-model gate returns **NO_TRADE**.
+- **Honest target evidence:** the alert reports the actual selected 5M or 15M target timeframe.
+- **Replay execution model:** when 1M history is available, replay resolves stop/target using 1M bars after the signal candle closes, estimates fill from the first subsequent 1M open, treats a gap beyond the target as missed rather than a win, uses the actual estimated fill for target R, and treats same-candle stop/target as a stop. It falls back to 5M resolution only when 1M data is unavailable and reports that limitation.
+- **History downloader:** scripts/fetch_history.py now downloads 1M as well as 5M and 15M history, and replay.py passes 1M history to the replay engine.
+- **Shadow ledger timing:** alerts are evaluated starting at the close of the 5M confirmation candle (candle_epoch + 300), not one minute after its opening timestamp. Open alerts are scored against deeper 1M history; the default fetch is 1,440 bars and can be changed with LEDGER_CANDLE_COUNT.
+- **Scorecard:** the ledger now reports closed sample count, expectancy in R per closed trade, maximum drawdown in R, maximum consecutive losses, and missed gap entries in addition to win rate and net R.
+
+### Still not completed / not proven
+
+- These changes do not establish profitability. No claim of a positive edge should be made until historical replay has been run on sufficiently large, market-specific datasets with an untouched holdout period.
+- The 20% single-candle and 45% mean-body thresholds, two-swing structural proxy, swing wings, reaction-size thresholds and sweep-depth thresholds remain hypotheses. They must be compared against annotated examples and tested out of sample.
+- Current cost modelling is a configured spread assumption; it does not yet model variable spread at every candle, commissions, financing, latency or real order fills.
+- The monitor remains candidate/scorecard only. Keep strategy alerts off until market-specific replay and paper-monitoring results are reviewed.

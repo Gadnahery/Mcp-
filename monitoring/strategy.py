@@ -84,6 +84,7 @@ class Candidate:
     entry_style: str = "decisive_close"
     sweep_epoch: int = 0
     target_reference: str = "next detected reaction area"
+    assumed_spread: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -632,6 +633,7 @@ def analyze_setup(
         entry_style=style,
         sweep_epoch=int(sweep["epoch"]),
         target_reference=(f"nearest {'significant ' if target_mode != 'nearest' else ''}{target_area['timeframe']} reaction/liquidity area in trade direction"),
+        assumed_spread=spread,
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)
 

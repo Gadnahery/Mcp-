@@ -19,8 +19,14 @@ No persistent disk: the dedupe file resets on restart (the engine only fires on 
 ## 3. Staged enablement
 1. `TELEGRAM_ENABLED=true`, `STRATEGY_ALERTS_ENABLED=false` → you get the startup message and
    heartbeat only; confirm Telegram works.
-2. Paper-monitor with `STRATEGY_ALERTS_ENABLED=true` for several weeks; compare each alert to the chart.
-3. Do not trade from alerts until the rulebook release gates are met.
+2. Before paper alerts, configure measured/provisional spread assumptions for every symbol you intend to monitor. The engine now returns `NO_TRADE` for symbols with no configured spread instead of assuming zero cost.
+3. Paper-monitor with `STRATEGY_ALERTS_ENABLED=true` for several weeks; compare each alert to the chart.
+4. Do not trade from alerts until the rulebook release gates are met.
+
+### Spread assumptions
+Set `ASSUMED_SPREADS` in Render environment settings as comma-separated symbol=value pairs, using actual observed spreads in each symbol's price units, for example:
+`frxXAUUSD=<measured-value>,R_25=<measured-value>,R_75=<measured-value>`
+The angle-bracket values above are placeholders, not valid configuration. Replace them with observed values before saving. These are still fixed assumptions, not a live variable-spread feed. Do not invent a spread just to make a symbol produce signals.
 
 ## 4. Keep the free Render instance awake (alerts only run while it is awake)
 Render's free web service sleeps after ~15 minutes without inbound traffic, and a sleeping service scans nothing.
@@ -30,7 +36,7 @@ Render's free web service sleeps after ~15 minutes without inbound traffic, and 
 - **Always-on:** Render Starter plan ($7/mo) never sleeps. Cheapest guaranteed option.
 
 ## 5. Durable alert tracking (scorecard)
-Every candidate is recorded and auto-scored from real 1M candles; send `/stats` to the bot.
+Every candidate is recorded and auto-scored from 1M candles; send `/stats` to the bot. The worker fetches deeper 1M history only while that symbol has open shadow alerts; the default is 1,440 bars and can be changed with `LEDGER_CANDLE_COUNT`.
 On Render free the disk is wiped on restart, so use Supabase. Run once in the Supabase SQL editor:
 
 ```sql
@@ -38,9 +44,10 @@ create table if not exists strategy_alerts (
   id text primary key,
   symbol text, side text,
   entry double precision, stop double precision, target double precision, rr double precision,
-  style text, alerted_at bigint, entry_epoch bigint,
+  style text, alerted_at bigint, entry_epoch bigint, assumed_spread double precision default 0,
   status text default 'open', closed_at bigint, r double precision
 );
+alter table strategy_alerts add column if not exists assumed_spread double precision default 0;
 alter table strategy_alerts enable row level security;  -- the service key bypasses RLS; keep it server-side only
 ```
 Then set `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` in Render. Without them, tracking uses a local file.

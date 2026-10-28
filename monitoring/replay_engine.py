@@ -159,6 +159,7 @@ def run_replay(
     summary = {
         "targets": sum(1 for c in candidates if c["outcome"] == "target"),
         "stops": sum(1 for c in candidates if str(c["outcome"]).startswith("stop")),
+        "missed": sum(1 for c in candidates if str(c["outcome"]).startswith("missed")),
         "open": sum(1 for c in candidates if c["outcome"] == "open"),
         "unfilled_or_cancelled": sum(1 for c in candidates if c["outcome"].startswith(("unfilled", "cancelled"))),
         "net_r": round(sum(c["r"] for c in done), 2),
@@ -180,6 +181,7 @@ def run_replay(
                 "targets": sum(1 for m in near_misses.values() if m.get("if_taken") == "target"),
                 "stops": sum(1 for m in near_misses.values() if str(m.get("if_taken", "")).startswith("stop")),
                 "open": sum(1 for m in near_misses.values() if m.get("if_taken") == "open"),
+                "missed": sum(1 for m in near_misses.values() if str(m.get("if_taken", "")).startswith("missed")),
                 "net_r": round(sum(m["if_taken_r"] for m in near_misses.values() if m.get("if_taken_r") is not None), 2),
             },
         },
@@ -222,7 +224,7 @@ def format_replay_report(result: dict[str, Any]) -> str:
         lines.append(f"  best R:R seen: {nm.get('best_rr_values')}")
         lines.append(f"  would pass at 1:2.5: {nm.get('would_pass_at_2.5')} · at 1:2: {nm.get('would_pass_at_2.0')}")
         it = nm.get("if_taken_at_market") or {}
-        lines.append(f"  if taken at market anyway (not recommended, just data): targets {it.get('targets')}, stops {it.get('stops')}, open {it.get('open')}, net {it.get('net_r')}R at their planned R:R")
+        lines.append(f"  if taken anyway (diagnostic only): targets {it.get('targets')}, stops {it.get('stops')}, missed {it.get('missed', 0)}, open {it.get('open')}, net {it.get('net_r')}R")
     cands = result.get("candidates") or []
     lines.append("")
     if not cands:
@@ -239,7 +241,7 @@ def format_replay_report(result: dict[str, Any]) -> str:
     else:
         sm = result.get("summary") or {}
         lines.append(f"Setups found: {len(cands)} — targets {sm.get('targets')}, stops {sm.get('stops')}, "
-                     f"open {sm.get('open')}, unfilled/cancelled {sm.get('unfilled_or_cancelled')}, net {sm.get('net_r')}R")
+                     f"missed {sm.get('missed', 0)}, open {sm.get('open')}, unfilled/cancelled {sm.get('unfilled_or_cancelled')}, net {sm.get('net_r')}R")
         for i, c in enumerate(cands[-8:], 1):  # last up to 8
             lines.append(
                 f"\n#{i} {c['side']} entry={c['entry']:.5f} "
@@ -252,7 +254,7 @@ def format_replay_report(result: dict[str, Any]) -> str:
                 lines.append(f"  • {e}")
 
     lines.append("")
-    lines.append("Note: experimental rules; no costs/slippage. Not financial advice.")
+    lines.append("Note: experimental rules; fixed assumed spread only, not full variable spread/commission/slippage/latency. 1M outcome resolution where covered; not financial advice.")
     return "\n".join(lines)
 
 
@@ -260,9 +262,10 @@ RR_BUCKETS = [(0.0, 1.0, "<1"), (1.0, 1.5, "1-1.5"), (1.5, 2.0, "1.5-2"), (2.0, 
 
 
 def rr_study(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group simulated market-entry outcomes by planned R:R (run the replay with min_rr ~0 first).
+    """Group replay outcomes by planned R:R (run the replay with min_rr ~0 first).
 
-    Win rate = targets / (targets + stops). Net R uses each trade's own planned R:R for wins and -1 for stops.
+    Outcomes use the estimated next-candle open and configured fixed spread when available.
+    Win rate = targets / (targets + stops); inspect sample size and resolution coverage.
     """
     rows = []
     for lo, hi, label in RR_BUCKETS:
@@ -283,7 +286,7 @@ def rr_study(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def format_rr_study(symbol: str, rows: list[dict[str, Any]], bars: int) -> str:
     total = sum(r["setups"] for r in rows)
-    lines = [f"R:R study - {symbol} ({bars} bars, {total} setups that passed every candle rule; outcomes at market entry)", ""]
+    lines = [f"R:R study - {symbol} ({bars} bars, {total} setups that passed every candle rule; estimated next-open fills)", ""]
     lines.append("R:R bucket | setups | win/loss | win% | net R | per trade")
     for r in rows:
         wr = f"{int(r['win_rate'] * 100)}%" if r["win_rate"] is not None else "-"

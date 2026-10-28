@@ -10,7 +10,7 @@ class ReplayTests(unittest.TestCase):
         m15, m5 = build()
         m5x = extend_5m(m5)
         # replay needs warmup candles before the setup; use a small warmup for synthetic data
-        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20)
+        result = run_replay("TEST", m15, m5x, m1=with_1m(m5x), warmup=20, opts={"spread": 0.0})
         self.assertEqual(len(result["candidates"]), 1)
         self.assertEqual(result["candidates"][0]["side"], "BUY")
         self.assertIn("CANDIDATE", result["tally"])
@@ -27,7 +27,7 @@ class StatusTests(unittest.TestCase):
         from monitoring.strategy import analyze_setup
         monitor_worker.STATUS.update(stage_tally={}, symbols={}, candidates=[])
         m15, m5 = build()
-        monitor_worker.record_analysis("TEST", analyze_setup("TEST", m15, m5, with_1m(m5)), now=1)
+        monitor_worker.record_analysis("TEST", analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0}), now=1)
         self.assertEqual(monitor_worker.STATUS["stage_tally"].get("CANDIDATE"), 1)
         self.assertEqual(monitor_worker.STATUS["candidates"][0]["side"], "BUY")
         self.assertEqual(monitor_worker.STATUS["symbols"]["TEST"]["status"], "CANDIDATE")

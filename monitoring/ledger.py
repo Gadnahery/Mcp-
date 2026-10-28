@@ -77,8 +77,21 @@ def resolve(row: dict[str, Any], candles: list[dict[str, Any]], now: int) -> tup
     known only after confirmation."""
     buy = row["side"] == "BUY"
     fill_price: float | None = None
+    signal_epoch = int(row.get("signal_epoch", row["entry_epoch"]))
+    entry_epoch = int(row["entry_epoch"])
     for c in sorted(candles, key=lambda x: int(x["epoch"])):
-        if int(c["epoch"]) < int(row["entry_epoch"]):
+        candle_epoch = int(c["epoch"])
+        if candle_epoch < signal_epoch:
+            continue
+        if candle_epoch < entry_epoch:
+            # The alert may arrive after the confirming candle's close. Do not score
+            # movement before the next eligible minute as a filled trade.
+            stop_before_fill = float(c["low"]) <= float(row["stop"]) if buy else float(c["high"]) >= float(row["stop"])
+            target_before_fill = float(c["high"]) >= float(row["target"]) if buy else float(c["low"]) <= float(row["target"])
+            if stop_before_fill:
+                return "cancelled", None, candle_epoch + 60
+            if target_before_fill:
+                return "missed", None, candle_epoch + 60
             continue
         if fill_price is None:
             fill_price = float(c.get("open", row["entry"]))
@@ -126,10 +139,13 @@ class Ledger:
         rid = f"{c.symbol}:{c.side}:{c.candle_epoch}"
         if any(r["id"] == rid for r in self.rows):
             return False
+        signal_epoch = int(c.candle_epoch) + 300
+        next_full_minute = (now // 60 + 1) * 60
         row = {
             "id": rid, "symbol": c.symbol, "side": c.side, "entry": c.entry, "stop": c.stop_loss,
             "target": c.take_profit, "rr": round(float(c.risk_reward), 3), "style": c.entry_style,
-            "alerted_at": now, "entry_epoch": int(c.candle_epoch) + 300, "status": "open",
+            "alerted_at": now, "signal_epoch": signal_epoch,
+            "entry_epoch": max(signal_epoch, next_full_minute), "status": "open",
             "assumed_spread": max(0.0, float(getattr(c, "assumed_spread", 0.0))),
             "closed_at": None, "r": None,
         }
@@ -181,6 +197,7 @@ class Ledger:
             "alerts": len(self.rows), "open": sum(1 for r in self.rows if r["status"] == "open"),
             "targets": wins, "stops": sum(1 for r in self.rows if r["status"] == "stop"),
             "missed": sum(1 for r in self.rows if r["status"] == "missed"),
+            "cancelled": sum(1 for r in self.rows if r["status"] == "cancelled"),
             "expired": sum(1 for r in self.rows if r["status"] == "expired"),
             "closed": len(done),
             "win_rate": round(wins / len(done), 2) if done else None,
@@ -199,7 +216,7 @@ def format_stats(s: dict[str, Any] | None) -> str:
     wr = f"{int(s['win_rate'] * 100)}%" if s.get("win_rate") is not None else "-"
     lines = [
         "Alert scorecard (auto-scored from real candles)",
-        f"Alerts {s['alerts']} · closed {s.get('closed', s['targets'] + s['stops'])} · targets {s['targets']} · stops {s['stops']} · missed {s.get('missed', 0)} · open {s['open']} · expired {s['expired']}",
+        f"Alerts {s['alerts']} · closed {s.get('closed', s['targets'] + s['stops'])} · targets {s['targets']} · stops {s['stops']} · missed {s.get('missed', 0)} · cancelled {s.get('cancelled', 0)} · open {s['open']} · expired {s['expired']}",
         f"Win rate {wr} · net {s['net_r']:+.2f}R · expectancy {s.get('expectancy_r', 0.0):+.2f}R/trade",
         f"Max drawdown {s.get('max_drawdown_r', 0.0):.2f}R · max losing streak {s.get('max_consecutive_losses', 0)}", "",
     ]

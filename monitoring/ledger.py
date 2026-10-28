@@ -72,17 +72,32 @@ def make_store():
 def resolve(row: dict[str, Any], candles: list[dict[str, Any]], now: int) -> tuple[str, float | None, int | None] | None:
     """Return (status, r, closed_at) once the trade hit target/stop (or expired), else None.
 
-    Same-candle stop+target is scored as a stop (worst case)."""
+    Same-candle stop+target is scored as a stop (worst case). The first eligible 1M
+    candle open is used as the shadow entry fill, preventing a fill at a close already
+    known only after confirmation."""
     buy = row["side"] == "BUY"
+    fill_price: float | None = None
     for c in sorted(candles, key=lambda x: int(x["epoch"])):
         if int(c["epoch"]) < int(row["entry_epoch"]):
             continue
+        if fill_price is None:
+            fill_price = float(c.get("open", row["entry"]))
+            if (buy and fill_price >= float(row["target"])) or (not buy and fill_price <= float(row["target"])):
+                return "missed", None, int(c["epoch"])
+            if (buy and fill_price <= float(row["stop"])) or (not buy and fill_price >= float(row["stop"])):
+                return "stop", -1.0, int(c["epoch"]) + 60
         hit_stop = float(c["low"]) <= float(row["stop"]) if buy else float(c["high"]) >= float(row["stop"])
         hit_tp = float(c["high"]) >= float(row["target"]) if buy else float(c["low"]) <= float(row["target"])
+        if hit_stop and hit_tp:
+            return "stop", -1.0, int(c["epoch"]) + 60
         if hit_stop:
             return "stop", -1.0, int(c["epoch"]) + 60
         if hit_tp:
-            return "target", round(float(row["rr"]), 2), int(c["epoch"]) + 60
+            spread = max(0.0, float(row.get("assumed_spread", 0.0)))
+            risk = abs(fill_price - float(row["stop"])) + spread
+            reward = (float(row["target"]) - fill_price if buy else fill_price - float(row["target"])) - spread
+            realized_r = round(reward / risk, 2) if risk > 0 and reward > 0 else 0.0
+            return "target", realized_r, int(c["epoch"]) + 60
     if now - int(row["alerted_at"]) > EXPIRE_SECONDS:
         return "expired", None, now
     return None
@@ -114,7 +129,8 @@ class Ledger:
         row = {
             "id": rid, "symbol": c.symbol, "side": c.side, "entry": c.entry, "stop": c.stop_loss,
             "target": c.take_profit, "rr": round(float(c.risk_reward), 3), "style": c.entry_style,
-            "alerted_at": now, "entry_epoch": int(c.candle_epoch) + 60, "status": "open",
+            "alerted_at": now, "entry_epoch": int(c.candle_epoch) + 300, "status": "open",
+            "assumed_spread": max(0.0, float(getattr(c, "assumed_spread", 0.0))),
             "closed_at": None, "r": None,
         }
         self.rows.append(row)
@@ -136,21 +152,43 @@ class Ledger:
 
     def summary(self) -> dict[str, Any]:
         done = [r for r in self.rows if r["status"] in ("target", "stop")]
+        ordered_done = sorted(done, key=lambda r: int(r.get("closed_at") or r["alerted_at"]))
+        cumulative = peak = max_drawdown = 0.0
+        consecutive_losses = current_losses = 0
+        for row in ordered_done:
+            value = float(row.get("r") or 0.0)
+            cumulative += value
+            peak = max(peak, cumulative)
+            max_drawdown = max(max_drawdown, peak - cumulative)
+            if value < 0:
+                current_losses += 1
+                consecutive_losses = max(consecutive_losses, current_losses)
+            else:
+                current_losses = 0
         wins = sum(1 for r in done if r["status"] == "target")
         by_symbol: dict[str, dict[str, Any]] = {}
         for r in self.rows:
-            s = by_symbol.setdefault(r["symbol"], {"alerts": 0, "targets": 0, "stops": 0, "open": 0, "net_r": 0.0})
+            s = by_symbol.setdefault(r["symbol"], {"alerts": 0, "targets": 0, "stops": 0, "open": 0, "missed": 0, "net_r": 0.0, "closed": 0})
             s["alerts"] += 1
             s["targets"] += r["status"] == "target"
             s["stops"] += r["status"] == "stop"
             s["open"] += r["status"] == "open"
+            s["missed"] += r["status"] == "missed"
+            s["closed"] += r["status"] in ("target", "stop")
             s["net_r"] = round(s["net_r"] + (r["r"] or 0.0), 2)
         recent = sorted(self.rows, key=lambda r: r["alerted_at"], reverse=True)[:5]
         return {
             "alerts": len(self.rows), "open": sum(1 for r in self.rows if r["status"] == "open"),
-            "targets": wins, "stops": len(done) - wins, "expired": sum(1 for r in self.rows if r["status"] == "expired"),
+            "targets": wins, "stops": sum(1 for r in self.rows if r["status"] == "stop"),
+            "missed": sum(1 for r in self.rows if r["status"] == "missed"),
+            "expired": sum(1 for r in self.rows if r["status"] == "expired"),
+            "closed": len(done),
             "win_rate": round(wins / len(done), 2) if done else None,
-            "net_r": round(sum(r["r"] for r in done), 2), "by_symbol": by_symbol,
+            "net_r": round(sum(float(r["r"]) for r in done), 2),
+            "expectancy_r": round(sum(float(r["r"]) for r in done) / len(done), 3) if done else None,
+            "max_drawdown_r": round(max_drawdown, 2),
+            "max_consecutive_losses": consecutive_losses,
+            "by_symbol": by_symbol,
             "recent": [{k: r[k] for k in ("symbol", "side", "entry", "rr", "status", "r")} for r in recent],
         }
 
@@ -161,8 +199,9 @@ def format_stats(s: dict[str, Any] | None) -> str:
     wr = f"{int(s['win_rate'] * 100)}%" if s.get("win_rate") is not None else "-"
     lines = [
         "Alert scorecard (auto-scored from real candles)",
-        f"Alerts {s['alerts']} · targets {s['targets']} · stops {s['stops']} · open {s['open']} · expired {s['expired']}",
-        f"Win rate {wr} · net {s['net_r']:+.2f}R", "",
+        f"Alerts {s['alerts']} · closed {s.get('closed', s['targets'] + s['stops'])} · targets {s['targets']} · stops {s['stops']} · missed {s.get('missed', 0)} · open {s['open']} · expired {s['expired']}",
+        f"Win rate {wr} · net {s['net_r']:+.2f}R · expectancy {s.get('expectancy_r', 0.0):+.2f}R/trade",
+        f"Max drawdown {s.get('max_drawdown_r', 0.0):.2f}R · max losing streak {s.get('max_consecutive_losses', 0)}", "",
     ]
     for sym, v in s["by_symbol"].items():
         lines.append(f"• {sym}: {v['alerts']} alerts, {v['targets']}W/{v['stops']}L, open {v['open']}, {v['net_r']:+.2f}R")

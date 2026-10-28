@@ -375,6 +375,23 @@ def _indecision_or_base(candles: list[dict[str, Any]], count: int = 3) -> tuple[
     return False, "No clear compact base detected"
 
 
+def _sweep_rejection_evidence(side: Side, sweep: dict[str, Any]) -> str:
+    """Describe the sweep candle's rejection wick without claiming to see order flow."""
+    o, h, low, close = (float(sweep[k]) for k in ("open", "high", "low", "close"))
+    candle_range = h - low
+    if candle_range <= 0:
+        return "Sweep candle has no usable range; rejection strength cannot be assessed"
+    rejection_wick = (h - max(o, close)) if side == "SELL" else (min(o, close) - low)
+    wick_ratio = max(0.0, rejection_wick) / candle_range
+    close_position = (close - low) / candle_range
+    wick_name = "upper" if side == "SELL" else "lower"
+    return (
+        f"Sweep-candle response: {wick_name} rejection wick is {wick_ratio:.0%} of range; "
+        f"close is {close_position:.0%} up from the low. This is price rejection evidence, "
+        "not direct proof of absorption or participant intent"
+    )
+
+
 def _dominance_confirm(side: str, sweep: dict[str, Any], after_sweep: list[dict[str, Any]]) -> dict[str, Any] | None:
     """First candle completing a run of consecutive closes in the trade direction after the sweep.
 
@@ -511,6 +528,11 @@ def analyze_setup(
     sweep_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(sweep["epoch"])), None)
     if sweep_index is None or sweep_index < 8 or sweep_index + 1 >= len(m5):
         return Analysis(symbol, "NO_TRADE", side, "post_sweep_reaction", tuple(evidence), ("Insufficient candles before/after sweep to assess the reaction",))
+
+    evidence.append(_sweep_rejection_evidence(side, sweep))
+    approach_base, approach_note = _indecision_or_base(m5[:sweep_index], count=3)
+    if approach_base:
+        evidence.append(f"Pre-sweep approach: {approach_note}; possible absorption/stalling is inferred from OHLC only")
 
     after_sweep = m5[sweep_index + 1:]
     if len(after_sweep) < 2:

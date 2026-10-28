@@ -101,7 +101,7 @@ A candidate should state:
 1. **Not fully validated:** current tests are basic unit tests, not a broad, realistic backtest.
 2. **Heuristic structure:** swing points, reaction tolerance and base detection are proxies; they can miss meaningful human-marked areas or label irrelevant ones.
 3. **Potential sequence bias:** the detector chooses a recent qualifying sweep and uses a fixed reaction-window heuristic. It needs systematic candle-by-candle replay against annotated examples.
-4. **Execution assumptions:** entry-at-close may not be fillable at that price after the candle closes. Spread/slippage and latency are not included in the 1:3 calculation.
+4. **Execution assumptions:** the alert's entry is the confirming 5M close, but replay/ledger estimate a fill at the first subsequent 1M open when available. Fixed assumed spread is included in planned R:R and replay target R; variable spread, commissions, slippage and latency remain unmodelled.
 5. **Market/session differences:** FX, gold, crypto and synthetic indices do not share identical session or candle behaviour. Validate per instrument family before enabling it.
 6. **Sparse evidence:** a single screenshot or one historical example cannot establish an edge.
 7. **No automatic position sizing or daily risk controls:** this component only proposes a candidate. It does not calculate safe stake size or enforce a portfolio loss limit.
@@ -146,18 +146,18 @@ Suggested metrics: number of trades, win rate, average win/loss in R, expectancy
 
 | Rule | Status |
 |---|---|
-| 15M context + 5M control and execution (1M disabled) | Implemented in code; replay/tests still required |
+| 15M structure/context + 5M control and execution; 1M outcome resolution | Implemented in code; replay/tests still required |
 | Close-to-close dominance | Implemented, simple 3-step proxy |
-| Unclear 15M is not automatically an opposing filter | Implemented and unit-tested |
+| Conflicting 5M/15M context is evidence, not an early hard rejection | Implemented; unit-tested context gates |
 | Swing references | Implemented as provisional two-candle-wing proxy |
 | Sweep-and-reclaim at a detected reference | Implemented, needs annotated replay |
-| Post-sweep base/reaction | Implemented as provisional heuristic |
-| Close beyond reaction range | Implemented |
+| Post-sweep control confirmation | Implemented as directional-close sequence; thresholds remain provisional |
+| Counter-bias close beyond sweep-candle boundary | Implemented for counter-bias confirmation |
 | Structural stop beyond swept extreme; nearest significant 5M/15M reaction target | Implemented; validate with replay |
-| Minimum planned 1:3 R:R | Implemented before costs |
+| Minimum planned 1:3 R:R | Implemented after configured fixed spread; missing spread returns NO_TRADE |
 | User-annotated short replay helper | Implemented for research, not live signals |
 | Pullback entry model | Not implemented |
-| Spread/slippage-aware R:R | Not implemented |
+| Fixed assumed spread in R:R and outcome scoring | Implemented; variable spread, commission and slippage not implemented |
 | Broad historical backtest and out-of-sample proof | Not completed |
 | Profitability claim | Not established |
 

@@ -45,6 +45,20 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         await b.update("TEST", [candle(1300, 99.5, 100.5, 100.0)], now=1000 + 25 * 3600)
         self.assertEqual(b.rows[0]["status"], "expired")
 
+    async def test_load_migrates_legacy_entry_epoch_without_signal_timestamp(self):
+        path = os.path.join(tempfile.mkdtemp(), "legacy.jsonl")
+        store = FileStore(path)
+        store.upsert({
+            "id": "TEST:BUY:1000", "symbol": "TEST", "side": "BUY", "entry": 100.0,
+            "stop": 99.0, "target": 103.0, "rr": 3.0, "style": "decisive_close",
+            "alerted_at": 1100, "entry_epoch": 1060, "status": "open",
+            "closed_at": None, "r": None,
+        })
+        ledger = Ledger(store)
+        await ledger.load()
+        self.assertEqual(ledger.rows[0]["signal_epoch"], 1300)
+        self.assertEqual(ledger.rows[0]["entry_epoch"], 1300)
+
     def test_resolve_ignores_candles_before_entry(self):
         row = dict(side="BUY", stop=99, target=103, rr=3.0, entry_epoch=1060, alerted_at=1000)
         self.assertIsNone(resolve(row, [candle(1000, 90, 120)], now=1100))

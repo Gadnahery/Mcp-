@@ -14,7 +14,7 @@
 - Requires 2–3 consecutive directional closes on M5 after the sweep, with each close progressing beyond the previous close.
 - Then waits for a fresh directional M1 response and uses the recent M1 micro-extreme plus a buffer for a tighter invalidation stop. Set UseM5Confirmation=true only for symbols where M1 entry refinement is unsuitable.
 - Default order placement is enabled, but demo-account-only protection remains enabled. Default fixed order size is 0.01 lots; set UseFixedLotSize=false to use risk-based sizing.
-- Uses the nearest detected opposing 5M/15M swing as target and rejects trades below 1:3 planned reward-to-risk.
+- Uses the nearest detected opposing 5M/15M swing as target and rejects trades below 1:3 planned reward-to-risk.\n- Manages open trades on every tick: once floating profit reaches +0.8R, attempts to move the stop beyond entry to lock +0.1R (subject to broker stop-distance rules).\n- If a trade has first moved at least +0.5R into profit and then 2 consecutive completed M1 candles show opposing close-to-close movement, the EA can close the position early rather than waiting for the original target. This is configurable and may also close trades before a later recovery.
 - Sizes volume from equity risk; rejects if broker minimum lot exceeds the risk budget.
 - Limits one position per symbol/magic, trades per day, and daily equity drawdown.
 - Demo order placement is enabled by default (EnableTrading=true), but the EA refuses non-demo accounts (DemoAccountOnly=true).
@@ -33,7 +33,7 @@ This is a first MT5 translation, not a proven exact replica of the Python engine
 
 ## Safety defaults
 - EnableTrading=true (demo only)
-- UseFixedLotSize=true; FixedLotSize=0.01
+- UseFixedLotSize=true; FixedLotSize=0.01 (EA rejects symbols whose broker volume limits cannot accept 0.01).\n- EnableProfitProtection=true; ProtectProfitAtR=0.80; LockProfitAtR=0.10.\n- CloseOnM1Reversal=true; CloseReversalAtR=0.50; ReversalCloses=2.
 - DemoAccountOnly=true and initialization is blocked on non-demo accounts.
 - Minimum RR cannot be lowered below 3.0.
 - Risk 0.25% per trade, maximum 3 entries/day, daily equity-loss cap 1%.
@@ -45,7 +45,7 @@ This is a first MT5 translation, not a proven exact replica of the Python engine
 - [ ] Compare H1/M15 context, M5 sweep, confirmation, SL/TP and RR with manually labelled charts.
 - [ ] Test both directions, spread spikes, gaps, insufficient history, market closed, minimum lot and rejected orders.
 - [ ] Verify risk sizing on symbols with different tick values and account currencies.
-- [ ] Check daily limits after terminal restarts and partial/closed deals.
+- [ ] Check daily limits after terminal restarts and partial/closed deals.\n- [ ] Test profit-protection stop moves and early reversal exits in Strategy Tester; verify broker stop-distance and execution behavior.
 - [ ] Run multi-month per-symbol backtests with costs and an untouched holdout.
 - [ ] Forward-test on demo. Do not claim a win rate before sufficient resolved trades.
 

@@ -143,8 +143,6 @@ async def run() -> None:
                 data = {}
                 for timeframe in ("15m", "5m"):
                     data[timeframe] = await api.candles(symbol, timeframe, settings.candle_count)
-                try:
-                except Exception:
                 # Candle timestamps are candle-open epochs. Require a recent completed
                 # candle on every timeframe; stale/closed-market data must never alert.
                 now = int(time.time())
@@ -165,7 +163,7 @@ async def run() -> None:
                 stats["scanned"] += 1
 
                 # Score any open alerts for this symbol against the latest real candles
-                if await ledger.update(symbol, data.get("1m") or data["5m"]):
+                if await ledger.update(symbol, data["5m"]):
                     STATUS["ledger"] = ledger.summary()
                 analysis = analyze_setup(symbol, data["15m"], data["5m"])
                 record_analysis(symbol, analysis)

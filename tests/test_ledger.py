@@ -60,6 +60,12 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0], "target")
         self.assertAlmostEqual(result[1], 1.0)  # actual fill at 101, not planned entry at 100
 
+    def test_pre_alert_target_is_missed_and_pre_alert_stop_cancels_unfilled_candidate(self):
+        base = dict(side="BUY", entry=100, stop=99, target=103, rr=3.0,
+                    assumed_spread=0.0, signal_epoch=1300, entry_epoch=1380, alerted_at=1325)
+        self.assertEqual(resolve(base, [candle(1300, 100.0, 103.2, 100.0)], now=1400)[0], "missed")
+        self.assertEqual(resolve(base, [candle(1300, 98.5, 100.5, 100.0)], now=1400)[0], "cancelled")
+
     def test_empty_stats_message(self):
         self.assertIn("No alerts recorded", format_stats(None))
 

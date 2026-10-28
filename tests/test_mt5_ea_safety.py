@@ -21,6 +21,16 @@ class Mt5EaSafetyTests(unittest.TestCase):
         self.assertIn("MinimumRewardRisk<3.0", EA)
         self.assertIn("reward/risk+1e-8<MinimumRewardRisk", EA)
 
+    def test_trade_management_and_minimum_lot(self):
+        self.assertIn("input double FixedLotSize=0.01", EA)
+        self.assertIn("input bool EnableProfitProtection=true", EA)
+        self.assertIn("input bool CloseOnM1Reversal=true", EA)
+        self.assertIn("void ManageOpenTrade()", EA)
+        self.assertIn("trade.PositionModify(_Symbol,wanted,tp)", EA)
+        self.assertIn("trade.PositionClose(_Symbol)", EA)
+        self.assertIn("ManageOpenTrade();", EA)
+        self.assertIn("two opposing M1 candles", GUIDE)
+
     def test_risk_guards(self):
         self.assertIn("RiskPercent", EA)
         self.assertIn("LossLimit()", EA)

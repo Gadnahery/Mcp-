@@ -11,15 +11,16 @@
 - Uses H1 close-to-close progress as dominance context.
 - Requires 15M swing structure to agree with the setup.
 - Searches completed 5M candles for a sweep beyond a recent range followed by a reclaim.
-- Requires 2–3 directional confirmation closes on M1 by default. Set UseM5Confirmation=true for symbols where M1 is unsuitable.
-- Places the stop beyond the sweep extreme with a small point buffer.
+- Requires 2–3 consecutive directional closes on M5 after the sweep, with each close progressing beyond the previous close.
+- Then waits for a fresh directional M1 response and uses the recent M1 micro-extreme plus a buffer for a tighter invalidation stop. Set UseM5Confirmation=true only for symbols where M1 entry refinement is unsuitable.
+- Default order placement is enabled, but demo-account-only protection remains enabled. Default fixed order size is 0.01 lots; set UseFixedLotSize=false to use risk-based sizing.
 - Uses the nearest detected opposing 5M/15M swing as target and rejects trades below 1:3 planned reward-to-risk.
 - Sizes volume from equity risk; rejects if broker minimum lot exceeds the risk budget.
 - Limits one position per symbol/magic, trades per day, and daily equity drawdown.
-- Trading is disabled by default. If enabled, the EA refuses non-demo accounts.
+- Demo order placement is enabled by default (EnableTrading=true), but the EA refuses non-demo accounts (DemoAccountOnly=true).
 
 ## Important limitations
-This is a first MT5 translation, not a proven exact replica of the Python engine or the full chart study. Swing structure, sweep/reclaim and candle strength are numerical proxies. The current prototype does not yet encode every described form of absorption/rejection and needs chart-by-chart validation against manually labelled examples. It does not call Deriv MCP: it uses the MT5 broker's own prices, symbol naming, spreads, contract specifications and execution.
+This is a first MT5 translation, not a proven exact replica of the Python engine or the full chart study. The M1 entry is a simplified directional response plus recent micro-extreme, not a complete detector for every absorption/rejection pattern. Swing structure, sweep/reclaim and candle strength are numerical proxies. The current prototype does not yet encode every described form of absorption/rejection and needs chart-by-chart validation against manually labelled examples. It does not call Deriv MCP: it uses the MT5 broker's own prices, symbol naming, spreads, contract specifications and execution.
 
 ## Install (desktop MT5 or compatible VPS required)
 1. In desktop MT5 choose File → Open Data Folder.
@@ -31,7 +32,8 @@ This is a first MT5 translation, not a proven exact replica of the Python engine
 7. Only enable order placement after compilation and manual chart review, and only on demo.
 
 ## Safety defaults
-- EnableTrading=false
+- EnableTrading=true (demo only)
+- UseFixedLotSize=true; FixedLotSize=0.01
 - DemoAccountOnly=true and initialization is blocked on non-demo accounts.
 - Minimum RR cannot be lowered below 3.0.
 - Risk 0.25% per trade, maximum 3 entries/day, daily equity-loss cap 1%.

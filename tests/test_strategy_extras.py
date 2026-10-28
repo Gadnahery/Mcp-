@@ -168,6 +168,8 @@ class OptsAndReplayTests(unittest.TestCase):
                          ("missed (gap beyond target)", None))
         outcome = _simulate(c, [{"open": 101.0, "high": 103.2, "low": 100.5, "close": 103.0}])
         self.assertEqual(outcome, ("target", 1.0))
+        invalidated = _simulate(c, [{"open": 98.5, "high": 99.0, "low": 98.0, "close": 98.5}])
+        self.assertEqual(invalidated, ("cancelled (gap beyond stop)", None))
 
     def test_replay_reports_near_misses_and_summary(self):
         m15, m5 = build()

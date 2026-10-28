@@ -35,13 +35,13 @@ class StrategyTests(unittest.TestCase):
         m5 = candles_from_closes([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], step=300)
         self.assertIsNone(detect_candidate("TEST", m15, m5))
 
-    def test_1m_execution_data_is_required(self):
+    def test_1m_is_not_required_in_current_two_timeframe_mode(self):
         flat_15m = candles_from_closes([10 + (i % 2) * 0.1 for i in range(30)], spread=0.2, step=900)
         flat_5m = candles_from_closes([10 + (i % 2) * 0.1 for i in range(30)], spread=0.2, step=300)
         result = analyze_setup("TEST", flat_15m, flat_5m)
         self.assertEqual(result.status, "NO_TRADE")
-        self.assertEqual(result.stage, "data_quality")
-        self.assertTrue(any("1M execution candles are required" in item for item in result.missing))
+        self.assertNotEqual(result.stage, "data_quality")
+        self.assertIsNone(result.candidate)
 
     def test_no_trade_on_flat_ambiguous_market(self):
         flat = candles_from_closes([10] * 30, spread=0.2)

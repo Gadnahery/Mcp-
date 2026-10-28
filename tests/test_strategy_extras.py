@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from monitoring.replay_engine import _simulate, run_replay
-from monitoring.strategy import _latest_unambiguous_sweep, _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, analyze_setup
+from monitoring.strategy import _confirmation_sequence_quality, _latest_unambiguous_sweep, _plan_entry, _reaction_areas, _select_target_area, _strong_counter_bias_confirmation, analyze_setup
 from tests.synth import extend_5m, with_1m
 from tests.test_engine_positive_path import _mk, build
 
@@ -80,6 +80,25 @@ class CostModelTests(unittest.TestCase):
         self.assertEqual(result.status, "NO_TRADE")
         self.assertEqual(result.stage, "cost_model")
         self.assertIn("No assumed spread configured", result.missing[0])
+
+
+class ConfirmationQualityTests(unittest.TestCase):
+    def test_bullish_confirmation_requires_close_near_high(self):
+        strong = [
+            {"open": 100.0, "high": 102.0, "low": 99.8, "close": 101.8},
+            {"open": 101.8, "high": 104.0, "low": 101.6, "close": 103.8},
+        ]
+        ok, reason = _confirmation_sequence_quality("BUY", strong)
+        self.assertTrue(ok, reason)
+
+    def test_directional_body_with_weak_close_position_is_rejected(self):
+        weak_close = [
+            {"open": 100.0, "high": 103.0, "low": 99.8, "close": 100.8},
+            {"open": 100.8, "high": 104.0, "low": 100.6, "close": 101.2},
+        ]
+        ok, reason = _confirmation_sequence_quality("BUY", weak_close)
+        self.assertFalse(ok)
+        self.assertIn("upper 35%", reason)
 
 
 class CounterBiasConfirmationTests(unittest.TestCase):

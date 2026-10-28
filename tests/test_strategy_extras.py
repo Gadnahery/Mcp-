@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from monitoring.replay_engine import _simulate, run_replay
-from monitoring.strategy import _plan_entry, _reaction_areas, analyze_setup
+from monitoring.strategy import _plan_entry, _reaction_areas, _select_target_area, analyze_setup
 from tests.synth import extend_5m, with_1m
 from tests.test_engine_positive_path import _mk, build
 
@@ -52,6 +52,36 @@ class ReactionAreaTests(unittest.TestCase):
         by_level = {round(a["level"], 1): a for a in highs}
         self.assertFalse(by_level[12.0]["significant"])
         self.assertTrue(by_level[20.0]["significant"])
+
+
+class TargetSelectionTests(unittest.TestCase):
+    def test_nearest_significant_intraday_target_beats_distant_15m_target(self):
+        areas_5m = [
+            {"level": 4042.0, "significant": True, "touches": 2, "reaction": 1.5},
+        ]
+        areas_15m = [
+            {"level": 4000.0, "significant": True, "touches": 1, "reaction": 12.0},
+        ]
+        target = _select_target_area("SELL", 4050.0, areas_5m, areas_15m)
+        self.assertIsNotNone(target)
+        self.assertEqual(target["level"], 4042.0)
+        self.assertEqual(target["timeframe"], "5M")
+
+    def test_target_must_be_beyond_entry_and_significant_by_default(self):
+        areas_5m = [
+            {"level": 4052.0, "significant": True, "touches": 2, "reaction": 1.5},
+            {"level": 4048.0, "significant": False, "touches": 1, "reaction": 0.1},
+        ]
+        areas_15m = []
+        self.assertIsNone(_select_target_area("SELL", 4050.0, areas_5m, areas_15m))
+        target = _select_target_area("SELL", 4050.0, areas_5m, areas_15m, "nearest")
+        self.assertEqual(target["level"], 4048.0)
+
+    def test_buy_target_is_nearest_valid_area_above_entry(self):
+        areas_5m = [{"level": 101.5, "significant": True, "touches": 2, "reaction": 1.0}]
+        areas_15m = [{"level": 105.0, "significant": True, "touches": 1, "reaction": 4.0}]
+        target = _select_target_area("BUY", 100.0, areas_5m, areas_15m)
+        self.assertEqual(target["level"], 101.5)
 
 
 class OptsAndReplayTests(unittest.TestCase):

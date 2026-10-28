@@ -4,9 +4,11 @@
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-input bool EnableTrading=false;
+input bool EnableTrading=true;
 input bool DemoAccountOnly=true;
 input double RiskPercent=0.25;
+input bool UseFixedLotSize=true;
+input double FixedLotSize=0.01;
 input double MinimumRewardRisk=3.0;
 input int MagicNumber=28102026;
 input int MaxTradesPerDay=3;
@@ -20,7 +22,7 @@ input double MinSingleBodyToRange=0.20;
 input double StopBufferPoints=3.0;
 input double MaxSpreadPoints=0.0;
 input int MaxEntryAgeMinutes=5;
-input bool UseM5Confirmation=false;
+input bool UseM5Confirmation=false; // retained for symbols where M1 entry confirmation is unsuitable
 input bool AllowMixedH1Context=false;
 
 datetime dayStart=0;
@@ -71,12 +73,37 @@ bool Sweep(int &side,double &extreme,datetime &when){
   if(r[i].low<lo&&r[i].close>lo&&r[i].close>r[i].open){side=BUY_SIDE;extreme=r[i].low;when=r[i].time;return true;}
  }return false;
 }
-bool Confirm(int side,datetime sweptAt){
- int n=MathMax(2,MathMin(3,ConfirmationCloses));MqlRates r[];if(!Rates(EntryTF(),n+3,r))return false;
- if(r[1].time<sweptAt+300||TimeCurrent()-r[1].time>MaxEntryAgeMinutes*60)return false; // confirmation must begin after the 5M sweep candle closes
+bool ConfirmM5(int side,datetime sweptAt){
+ int n=MathMax(2,MathMin(3,ConfirmationCloses));MqlRates r[];if(!Rates(PERIOD_M5,n+4,r))return false;
+ // The full run of consecutive dominance candles must close after the sweep candle.
+ if(r[n].time<sweptAt+300)return false;
  double sum=0,prev=0;
- for(int i=n;i>=1;i--){if(side==BUY_SIDE?r[i].close<=r[i].open:r[i].close>=r[i].open)return false;double b=BodyRatio(r[i]);if(b<MinSingleBodyToRange)return false;sum+=b;if(i<n&&(side==BUY_SIDE?r[i].close<=prev:r[i].close>=prev))return false;prev=r[i].close;}
+ for(int i=n;i>=1;i--){
+  if(side==BUY_SIDE?r[i].close<=r[i].open:r[i].close>=r[i].open)return false;
+  double b=BodyRatio(r[i]);if(b<MinSingleBodyToRange)return false;sum+=b;
+  if(i<n&&(side==BUY_SIDE?r[i].close<=prev:r[i].close>=prev))return false;
+  prev=r[i].close;
+ }
  return sum/n>=MinBodyToRange;
+}
+bool M1Entry(int side,datetime m5ConfirmedAt,double &entry,double &sl){
+ if(UseM5Confirmation){ // optional fallback: use M5 close-based entry with original sweep invalidation
+  MqlRates r[];if(!Rates(PERIOD_M5,3,r)||r[1].time<m5ConfirmedAt)return false;
+  entry=side==BUY_SIDE?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
+  sl=side==BUY_SIDE?r[1].low-StopBufferPoints*_Point:r[1].high+StopBufferPoints*_Point;
+  return true;
+ }
+ MqlRates r[];if(!Rates(PERIOD_M1,8,r))return false;
+ // Wait for a fresh 1M directional response after M5 dominance is confirmed.
+ if(r[1].time<m5ConfirmedAt||TimeCurrent()-r[1].time>MaxEntryAgeMinutes*60)return false;
+ if(side==BUY_SIDE?(r[1].close<=r[1].open||r[1].close<=r[2].close):(r[1].close>=r[1].open||r[1].close>=r[2].close))return false;
+ if(BodyRatio(r[1])<MinSingleBodyToRange)return false;
+ double microExtreme=side==BUY_SIDE?DBL_MAX:-DBL_MAX;
+ // Tight invalidation comes from the most recent 1M micro-structure, not the entire 5M sweep.
+ for(int i=1;i<=5;i++){if(side==BUY_SIDE)microExtreme=MathMin(microExtreme,r[i].low);else microExtreme=MathMax(microExtreme,r[i].high);}
+ entry=side==BUY_SIDE?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
+ sl=side==BUY_SIDE?microExtreme-StopBufferPoints*_Point:microExtreme+StopBufferPoints*_Point;
+ return (side==BUY_SIDE?sl<entry:sl>entry);
 }
 bool Target(int side,double entry,double &tp){
  double v=0,c=0;bool found=false;
@@ -85,6 +112,12 @@ bool Target(int side,double entry,double &tp){
  if(found)tp=c;return found;
 }
 double Lots(double entry,double sl){
+ if(UseFixedLotSize){
+  double requested=FixedLotSize,minV=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN),maxV=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX),stepV=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+  if(requested<minV||requested>maxV||stepV<=0)return 0;
+  double normalized=MathFloor((requested+1e-9)/stepV)*stepV;
+  return normalized>=minV?NormalizeDouble(normalized,3):0;
+ }
  double money=AccountInfoDouble(ACCOUNT_EQUITY)*RiskPercent/100,tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE),value=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE),dist=MathAbs(entry-sl);
  if(money<=0||tick<=0||value<=0||dist<=0)return 0;double raw=money/(dist/tick*value),minLot=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);if(raw<minLot)return 0;
  double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);if(step<=0)return 0;return NormalizeDouble(MathFloor(MathMin(raw,SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX))/step)*step,step<0.01?3:2);
@@ -96,10 +129,10 @@ void Evaluate(){
  if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)||!MQLInfoInteger(MQL_TRADE_ALLOWED)||LossLimit()||tradesToday>=MaxTradesPerDay||OurPosition()){Comment("Trading guard active (permissions/risk/position cap)");return;}
  double spread=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID))/_Point;if(MaxSpreadPoints>0&&spread>MaxSpreadPoints){Comment("NO TRADE: spread gate");return;}
  int h=H1Bias(),m=M15Structure();if((h==0&&!AllowMixedH1Context)||m==0||(h!=0&&h!=m)){Comment("NO TRADE: H1/M15 context unclear or conflicting");return;}
- int side=0;double extreme=0;datetime st=0;if(!Sweep(side,extreme,st)){Comment("NO TRADE: no M5 sweep/reclaim");return;}
- if(side!=m||(h!=0&&side!=h)||!Confirm(side,st)){Comment("NO TRADE: sweep/confirmation conflicts with context");return;}
- double entry=side==BUY_SIDE?SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID);
- double sl=side==BUY_SIDE?extreme-StopBufferPoints*_Point:extreme+StopBufferPoints*_Point,tp=0;
+ int side=0;double sweepExtreme=0;datetime st=0;if(!Sweep(side,sweepExtreme,st)){Comment("NO TRADE: no M5 sweep/reclaim");return;}
+ if(side!=m||(h!=0&&side!=h)||!ConfirmM5(side,st)){Comment("NO TRADE: M5 sweep or consecutive dominance confirmation conflicts with context");return;}
+ double entry=0,sl=0,tp=0;
+ if(!M1Entry(side,st+300,entry,sl)){Comment("NO TRADE: waiting for a fresh M1 entry response after M5 dominance");return;}
  if(!Target(side,entry,tp)){Comment("NO TRADE: no opposing reaction area");return;}
  double risk=MathAbs(entry-sl),reward=side==BUY_SIDE?tp-entry:entry-tp;if(risk<=0||reward/risk+1e-8<MinimumRewardRisk){Comment("NO TRADE: next area fails 1:3 R:R");return;}
  double minDist=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
@@ -109,5 +142,5 @@ void Evaluate(){
  bool ok=side==BUY_SIDE?trade.Buy(lots,_Symbol,0,NormalizeDouble(sl,_Digits),NormalizeDouble(tp,_Digits),"CandleBehaviourEA BUY"):trade.Sell(lots,_Symbol,0,NormalizeDouble(sl,_Digits),NormalizeDouble(tp,_Digits),"CandleBehaviourEA SELL");
  if(ok){tradesToday++;Print("DEMO EA ",side==BUY_SIDE?"BUY":"SELL"," lots=",lots," SL=",sl," TP=",tp," RR=",reward/risk);}else Print("Order rejected: ",trade.ResultRetcodeDescription());
 }
-int OnInit(){if(MinimumRewardRisk<3.0||ConfirmationCloses<2||ConfirmationCloses>3||RiskPercent<=0||MaxDailyLossPercent<=0||MaxTradesPerDay<1)return INIT_PARAMETERS_INCORRECT;if(DemoAccountOnly&&AccountInfoInteger(ACCOUNT_TRADE_MODE)!=ACCOUNT_TRADE_MODE_DEMO){Print("Refusing non-demo account");return INIT_FAILED;}RefreshDay();Print("EA prototype. Demo-only; EnableTrading=",EnableTrading);return INIT_SUCCEEDED;}
+int OnInit(){if(MinimumRewardRisk<3.0||ConfirmationCloses<2||ConfirmationCloses>3||RiskPercent<=0||FixedLotSize<=0||MaxDailyLossPercent<=0||MaxTradesPerDay<1)return INIT_PARAMETERS_INCORRECT;if(DemoAccountOnly&&AccountInfoInteger(ACCOUNT_TRADE_MODE)!=ACCOUNT_TRADE_MODE_DEMO){Print("Refusing non-demo account");return INIT_FAILED;}RefreshDay();Print("EA prototype. Demo-only; EnableTrading=",EnableTrading," fixedLots=",UseFixedLotSize," lot=",FixedLotSize);return INIT_SUCCEEDED;}
 void OnTick(){static datetime last=0;datetime t=iTime(_Symbol,EntryTF(),1);if(t<=0||t==last)return;last=t;Evaluate();}

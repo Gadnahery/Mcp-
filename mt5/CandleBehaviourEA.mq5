@@ -147,4 +147,4 @@ void Evaluate(){
  if(ok){tradesToday++;Print("DEMO EA ",side==BUY_SIDE?"BUY":"SELL"," lots=",lots," SL=",sl," TP=",tp," RR=",reward/risk);}else Print("Order rejected: ",trade.ResultRetcodeDescription());
 }
 int OnInit(){if(MinimumRewardRisk<3.0||ConfirmationCloses<2||ConfirmationCloses>3||RiskPercent<=0||FixedLotSize<0.01||MaxDailyLossPercent<=0||MaxTradesPerDay<1)return INIT_PARAMETERS_INCORRECT;if(DemoAccountOnly&&AccountInfoInteger(ACCOUNT_TRADE_MODE)!=ACCOUNT_TRADE_MODE_DEMO){Print("Refusing non-demo account");return INIT_FAILED;}RefreshDay();Print("EA prototype. Demo-only; EnableTrading=",EnableTrading," fixedLots=",UseFixedLotSize," lot=",FixedLotSize);return INIT_SUCCEEDED;}
-void OnTick(){\n ManageOpenTrade(); // runs on every tick so SL protection is not delayed to the next entry candle\n static datetime last=0;datetime t=iTime(_Symbol,EntryTF(),1);if(t<=0||t==last)return;last=t;Evaluate();\n}
+void OnTick(){static datetime last=0;datetime t=iTime(_Symbol,EntryTF(),1);if(t<=0||t==last)return;last=t;Evaluate();}

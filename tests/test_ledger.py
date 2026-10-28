@@ -49,6 +49,17 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         row = dict(side="BUY", stop=99, target=103, rr=3.0, entry_epoch=1060, alerted_at=1000)
         self.assertIsNone(resolve(row, [candle(1000, 90, 120)], now=1100))
 
+    def test_resolve_uses_next_one_minute_open_not_optimistic_signal_close(self):
+        row = dict(side="BUY", entry=100, stop=99, target=103, rr=3.0,
+                   assumed_spread=0.0, entry_epoch=1300, alerted_at=1000)
+        candles = [
+            candle(1300, 100.5, 101.5, 101.0),
+            candle(1360, 100.5, 103.2, 101.5),
+        ]
+        result = resolve(row, candles, now=1400)
+        self.assertEqual(result[0], "target")
+        self.assertAlmostEqual(result[1], 1.0)  # actual fill at 101, not planned entry at 100
+
     def test_empty_stats_message(self):
         self.assertIn("No alerts recorded", format_stats(None))
 

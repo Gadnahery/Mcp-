@@ -98,7 +98,7 @@ def resolve(row: dict[str, Any], candles: list[dict[str, Any]], now: int) -> tup
             if (buy and fill_price >= float(row["target"])) or (not buy and fill_price <= float(row["target"])):
                 return "missed", None, int(c["epoch"])
             if (buy and fill_price <= float(row["stop"])) or (not buy and fill_price >= float(row["stop"])):
-                return "stop", -1.0, int(c["epoch"]) + 60
+                return "cancelled", None, int(c["epoch"]) + 60
         hit_stop = float(c["low"]) <= float(row["stop"]) if buy else float(c["high"]) >= float(row["stop"])
         hit_tp = float(c["high"]) >= float(row["target"]) if buy else float(c["low"]) <= float(row["target"])
         if hit_stop and hit_tp:
@@ -200,12 +200,13 @@ class Ledger:
         wins = sum(1 for r in done if r["status"] == "target")
         by_symbol: dict[str, dict[str, Any]] = {}
         for r in self.rows:
-            s = by_symbol.setdefault(r["symbol"], {"alerts": 0, "targets": 0, "stops": 0, "open": 0, "missed": 0, "net_r": 0.0, "closed": 0})
+            s = by_symbol.setdefault(r["symbol"], {"alerts": 0, "targets": 0, "stops": 0, "open": 0, "missed": 0, "cancelled": 0, "net_r": 0.0, "closed": 0})
             s["alerts"] += 1
             s["targets"] += r["status"] == "target"
             s["stops"] += r["status"] == "stop"
             s["open"] += r["status"] == "open"
             s["missed"] += r["status"] == "missed"
+            s["cancelled"] += r["status"] == "cancelled"
             s["closed"] += r["status"] in ("target", "stop")
             s["net_r"] = round(s["net_r"] + (r["r"] or 0.0), 2)
         recent = sorted(self.rows, key=lambda r: r["alerted_at"], reverse=True)[:5]

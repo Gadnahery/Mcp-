@@ -442,8 +442,13 @@ def analyze_setup(
     if len(after_sweep) < 2:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Need at least two completed candles after the sweep to confirm control",))
 
-    # User rule: confirm control with two consecutive directional body closes
-    # and close-to-close progress. A third matching close strengthens the signal.
+    # Normal setups need two directional body closes; counter-bias setups must find
+    # a full three-candle strong sequence that also breaks the sweep-candle boundary.
+    counter_bias_required = bool(
+        m15_dom and
+        ((m15_dom == "bullish" and side == "SELL") or
+         (m15_dom == "bearish" and side == "BUY"))
+    )
     confirm: dict[str, Any] | None = None
     count = 0
     for j in range(1, len(after_sweep)):
@@ -453,12 +458,22 @@ def analyze_setup(
         valid = (pc < po and cc < co and cc < pc) if side == "SELL" else (pc > po and cc > co and cc > pc)
         if not valid:
             continue
-        confirm, count = current, 2
-        if j + 1 < len(after_sweep):
-            third = after_sweep[j + 1]
+        third = after_sweep[j + 1] if j + 1 < len(after_sweep) else None
+        third_matches = False
+        if third is not None:
             to, tc = float(third["open"]), float(third["close"])
-            if (side == "SELL" and tc < to and tc < cc) or (side == "BUY" and tc > to and tc > cc):
-                confirm, count = third, 3
+            third_matches = (tc < to and tc < cc) if side == "SELL" else (tc > to and tc > cc)
+        if counter_bias_required:
+            if not third_matches:
+                continue
+            strong_ok, _ = _strong_counter_bias_confirmation(side, sweep, after_sweep[j - 1:j + 2])
+            if not strong_ok:
+                continue
+            confirm, count = third, 3
+            break
+        confirm, count = current, 2
+        if third_matches:
+            confirm, count = third, 3
         break
     if confirm is None:
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))

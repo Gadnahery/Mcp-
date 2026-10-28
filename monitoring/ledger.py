@@ -124,6 +124,22 @@ class Ledger:
     async def load(self) -> None:
         try:
             self.rows = await asyncio.to_thread(self.store.load)
+            # Migrate older rows that stored entry_epoch as signal-candle-open + 60.
+            # Recover the candle epoch from the dedupe ID and prevent pre-alert lookahead.
+            for row in self.rows:
+                if row.get("signal_epoch") is not None:
+                    continue
+                parts = str(row.get("id", "")).rsplit(":", 1)
+                try:
+                    candle_epoch = int(parts[-1])
+                    signal_epoch = candle_epoch + 300
+                except (ValueError, IndexError):
+                    signal_epoch = int(row.get("entry_epoch", 0))
+                alerted_at = int(row.get("alerted_at", signal_epoch))
+                next_full_minute = (alerted_at // 60 + 1) * 60
+                row["signal_epoch"] = signal_epoch
+                row["entry_epoch"] = max(signal_epoch, next_full_minute)
+                await self._save(row)
         except Exception:
             logger.exception("Ledger load failed; starting empty")
             self.rows = []

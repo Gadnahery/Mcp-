@@ -2,7 +2,7 @@
 
 **Status:** research implementation; not approved for live trading  
 **Engine:** Deriv MCP strategy monitor  
-**Timeframes:** 15-minute context + 5-minute sweep/control + 1-minute execution  
+**Timeframes:** 15-minute context + 5-minute sweep/control and execution (1-minute execution is currently disabled)  
 **Execution:** alerts only; no order placement
 
 ## 1. Purpose and operating principle
@@ -24,7 +24,7 @@ The strategy's working ideas are:
 | 15M | Context, meaningful swing references, reaction areas | Detect provisional swing highs/lows and broad close-to-close dominance |
 | 5M | Approach, sweep/reclaim, post-sweep response, confirmation and entry | Evaluate the sequence and calculate entry, stop, target and planned R:R |
 
-The 1H timeframe is intentionally not used. The 1M timeframe is required for execution confirmation after a completed 5M control signal; if 1M data is unavailable, the engine must return NO_TRADE rather than silently entering from 5M.
+The 1H timeframe is intentionally not used in the current replay configuration. The 1M execution layer is currently disabled; entries use the completed 5M confirmation close. This must be kept explicit in replay output and documentation.
 
 ## 3. Setup sequence
 
@@ -141,14 +141,14 @@ Suggested metrics: number of trades, win rate, average win/loss in R, expectancy
 
 | Rule | Status |
 |---|---|
-| 15M context + 5M control + required 1M execution confirmation | Implemented in code; replay/tests still required |
+| 15M context + 5M control and execution (1M disabled) | Implemented in code; replay/tests still required |
 | Close-to-close dominance | Implemented, simple 3-step proxy |
 | Unclear 15M is not automatically an opposing filter | Implemented and unit-tested |
 | Swing references | Implemented as provisional two-candle-wing proxy |
 | Sweep-and-reclaim at a detected reference | Implemented, needs annotated replay |
 | Post-sweep base/reaction | Implemented as provisional heuristic |
 | Close beyond reaction range | Implemented |
-| Structural stop and nearest detected 15M swing target | Implemented |
+| Structural stop beyond swept extreme; nearest significant 5M/15M reaction target | Implemented; validate with replay |
 | Minimum planned 1:3 R:R | Implemented before costs |
 | User-annotated short replay helper | Implemented for research, not live signals |
 | Pullback entry model | Not implemented |
@@ -268,3 +268,14 @@ candle's low only. Fixes:
   expired). `/stats` shows win rate and net R per pair. Optional Supabase storage survives restarts.
 - **/health** reports monitor liveness; GitHub Actions pinger added (see docs/DEPLOY_AND_TELEGRAM.md section 4).
 - 1M confirmation makes entries later than a 5M-only entry, so R:R is naturally lower: check the study before judging.
+
+
+## Update 2026-10-28 — nearer intraday TP selection
+
+- Target selection now evaluates significant reaction/liquidity areas from both 5M and 15M data rather than only significant 15M swings.
+- 5M targets use a more sensitive reaction-size threshold to account for smaller intraday candle ranges; repeated touches still qualify as meaningful liquidity.
+- The closest eligible target in the trade direction is selected. A 15M area wins only when equally distant, not merely because it is a 15M level.
+- SELL TP must be below entry; BUY TP must be above entry. The engine keeps the 1:3 minimum after assumed spread. If the nearer target fails that minimum, the engine rejects the setup rather than selecting a much farther target to make the ratio look attractive.
+- SL remains anchored beyond the swept extreme, extended if price makes a more extreme high/low before confirmation.
+- Added unit tests for nearest-target selection, direction checks, and significant-area filtering.
+- This change corrects target-selection logic; it does not establish profitability. The full test suite and historical replay must pass before live reliance.

@@ -9,11 +9,12 @@ from monitoring.ledger import FileStore, Ledger, format_stats, resolve
 
 def cand(side="BUY", entry=100.0, stop=99.0, target=103.0, epoch=1000):
     return SimpleNamespace(symbol="TEST", side=side, entry=entry, stop_loss=stop, take_profit=target,
-                           risk_reward=3.0, entry_style="decisive_close", candle_epoch=epoch)
+                           risk_reward=3.0, entry_style="decisive_close", candle_epoch=epoch, assumed_spread=0.0)
 
 
-def candle(epoch, low, high):
-    return dict(epoch=epoch, open=(low + high) / 2, high=high, low=low, close=(low + high) / 2)
+def candle(epoch, low, high, op=None):
+    return dict(epoch=epoch, open=(low + high) / 2 if op is None else op,
+                high=high, low=low, close=(low + high) / 2)
 
 
 class LedgerTests(unittest.IsolatedAsyncioTestCase):
@@ -24,9 +25,9 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         await ledger.record(cand(epoch=2000, stop=99.0, target=103.0), now=2100)
         await ledger.record(cand(side="SELL", entry=100, stop=101, target=97, epoch=3000), now=3100)
         candles = [candle(900, 90, 120),                                   # before entry: ignored
-                   candle(1060, 99.5, 101), candle(1120, 100, 103.2),      # alert 1 -> target
-                   candle(2060, 98.5, 100.5),                              # alert 2 -> stop
-                   candle(3060, 96.5, 101.5)]                              # alert 3 -> stop AND target same candle: stop
+                   candle(1300, 99.5, 101, 100.0), candle(1360, 100, 103.2, 101.0),  # alert 1 -> target
+                   candle(2300, 98.5, 100.5, 100.0),                        # alert 2 -> stop
+                   candle(3300, 96.5, 101.5, 100.0)]                        # alert 3 -> stop AND target same candle: stop
         self.assertEqual(await ledger.update("TEST", candles, now=4000), 3)
         s = ledger.summary()
         self.assertEqual((s["targets"], s["stops"], s["open"]), (1, 2, 0))
@@ -41,7 +42,7 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         b = Ledger(FileStore(path))
         await b.load()
         self.assertEqual(len(b.rows), 1)
-        await b.update("TEST", [candle(1060, 99.5, 100.5)], now=1000 + 25 * 3600)
+        await b.update("TEST", [candle(1300, 99.5, 100.5, 100.0)], now=1000 + 25 * 3600)
         self.assertEqual(b.rows[0]["status"], "expired")
 
     def test_resolve_ignores_candles_before_entry(self):

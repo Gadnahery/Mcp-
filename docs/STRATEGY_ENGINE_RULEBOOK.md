@@ -2,7 +2,7 @@
 
 **Status:** research implementation; not approved for live trading  
 **Engine:** Deriv MCP strategy monitor  
-**Timeframes:** 15-minute context + 5-minute execution only  
+**Timeframes:** 15-minute context + 5-minute sweep/control + 1-minute execution  
 **Execution:** alerts only; no order placement
 
 ## 1. Purpose and operating principle
@@ -24,7 +24,7 @@ The strategy's working ideas are:
 | 15M | Context, meaningful swing references, reaction areas | Detect provisional swing highs/lows and broad close-to-close dominance |
 | 5M | Approach, sweep/reclaim, post-sweep response, confirmation and entry | Evaluate the sequence and calculate entry, stop, target and planned R:R |
 
-The 1H and 1M timeframes are intentionally **not used** by the strategy engine. Do not reintroduce them as mandatory filters without an explicit strategy review and regression tests.
+The 1H timeframe is intentionally not used. The 1M timeframe is required for execution confirmation after a completed 5M control signal; if 1M data is unavailable, the engine must return NO_TRADE rather than silently entering from 5M.
 
 ## 3. Setup sequence
 
@@ -59,7 +59,7 @@ The 1H and 1M timeframes are intentionally **not used** by the strategy engine. 
 - The current code uses a compact/alternating candle-cluster heuristic as a proxy for indecision/base. This is provisional.
 - After the reaction range is defined, require a later completed 5M close beyond that range in the proposed trade direction.
 - A zone touch, wick, or sweep without the later close is not confirmation.
-- Current automated entry is the confirmation candle's close. Pullback entry is not implemented because its exact rules remain unresolved.
+- The 5M confirmation candle establishes control but is not the entry. After it closes, require two consecutive 1M directional body closes with close-to-close progress; a third matching close strengthens the signal. Entry and R:R are calculated from the final 1M confirmation close. Stale 1M confirmations are rejected. Pullback entry remains unimplemented.
 
 ### Gate F — Invalidation, target and reward-to-risk
 - BUY stop: lowest low from the sweep through confirmation.
@@ -141,7 +141,7 @@ Suggested metrics: number of trades, win rate, average win/loss in R, expectancy
 
 | Rule | Status |
 |---|---|
-| 15M context + 5M execution; no 1H/1M dependency | Implemented |
+| 15M context + 5M control + required 1M execution confirmation | Implemented in code; replay/tests still required |
 | Close-to-close dominance | Implemented, simple 3-step proxy |
 | Unclear 15M is not automatically an opposing filter | Implemented and unit-tested |
 | Swing references | Implemented as provisional two-candle-wing proxy |
@@ -249,3 +249,11 @@ candle's low only. Fixes:
 - **Replay shows rejected setups' "what if taken at market"** so R:R minimums can be judged with data
   instead of guesses. R_25 window (Oct 25-26): every valid setup hit its target at market entry, but at only
   ~1:0.5 to 1:2.4 — none reached 1:3. One window is not evidence; use `/replay` on every pair and `rr2`/`rr2.5` variants.
+
+
+## Update 2026-10-28 — 1M is now an execution timeframe
+- The worker already fetched 1M candles, but previously the strategy only used them as an optional conflict filter and entered at the 5M close.
+- The engine now requires 1M candles. After the completed 5M confirmation candle closes, it waits for two consecutive 1M directional body closes with close-to-close progress (a third matching close strengthens the signal).
+- Entry and planned R:R are calculated using the final 1M confirmation close. The 1M confirmation must be fresh; the engine will not fall back to a 5M-only entry if 1M data is missing.
+- This can reduce late entries or change R:R, but it can also reject setups that never confirm on 1M. It is not evidence of profitability until historical replay and tests pass.
+- Setups rejected by the 1:3 R:R gate may later reach their target; that does not make the original entry valid at 1:3. The replay report should continue tracking these separately, with realistic spread/slippage and actual entry timing.

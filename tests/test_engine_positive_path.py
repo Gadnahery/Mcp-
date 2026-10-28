@@ -53,7 +53,7 @@ def build(depth=0.3):
 class PositivePathTests(unittest.TestCase):
     def test_textbook_buy_produces_candidate_with_structural_stop_and_3r(self):
         m15, m5 = build()
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         self.assertEqual(result.status, "CANDIDATE", result.missing)
         c = result.candidate
         self.assertEqual(c.side, "BUY")
@@ -63,7 +63,7 @@ class PositivePathTests(unittest.TestCase):
     def test_no_candidate_without_the_confirming_close(self):
         m15, m5 = build()
         m5[-2] = dict(m5[-2], close=100.5, low=100.2)          # last completed candle turns bearish
-        self.assertNotEqual(analyze_setup("TEST", m15, m5, with_1m(m5)).status, "CANDIDATE")
+        self.assertNotEqual(analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0}).status, "CANDIDATE")
 
 
 if __name__ == "__main__":
@@ -73,12 +73,12 @@ if __name__ == "__main__":
 class SweepAndFreshnessTests(unittest.TestCase):
     def test_deeper_sweep_within_range_multiple_is_detected(self):
         m15, m5 = build(depth=2.0)
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         self.assertNotEqual(result.stage, "location_or_sweep")  # the deeper sweep is recognised (R:R may still fail)
 
     def test_sweep_far_beyond_the_level_is_not_a_sweep(self):
         m15, m5 = build(depth=9.0)  # more than 0.75x the median 15M range
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         self.assertNotEqual(result.status, "CANDIDATE")
         self.assertEqual(result.stage, "location_or_sweep")
 
@@ -120,22 +120,22 @@ class TwoCloseConfirmationTests(unittest.TestCase):
     def test_two_bullish_body_closes_after_a_sweep_are_a_candidate(self):
         # Keep the confirmation close below the nearer target so the closest target still clears 1:3.
         m15, m5 = _impulse([(100.4, 101.0), (101.0, 101.7)])
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         self.assertEqual(result.status, "CANDIDATE", (result.stage, result.missing))
         self.assertEqual(result.candidate.side, "BUY")
 
     def test_three_closes_still_work(self):
         m15, m5 = _impulse([(100.4, 100.9), (100.9, 101.5), (101.5, 102.0)])
-        self.assertEqual(analyze_setup("TEST", m15, m5, with_1m(m5)).status, "CANDIDATE")
+        self.assertEqual(analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0}).status, "CANDIDATE")
 
     def test_a_bearish_candle_breaks_the_pair(self):
         m15, m5 = _impulse([(100.4, 101.3), (101.3, 100.9), (100.9, 101.0)])
-        self.assertNotEqual(analyze_setup("TEST", m15, m5, with_1m(m5)).status, "CANDIDATE")
+        self.assertNotEqual(analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0}).status, "CANDIDATE")
 
     def test_no_progress_close_to_close_is_not_control(self):
         # second candle is bullish by body but closes below the previous close
         m15, m5 = _impulse([(100.4, 101.3), (100.9, 101.2), (101.2, 101.25)])
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         self.assertTrue(result.status != "CANDIDATE" or result.candidate.candle_epoch != m5[-3]["epoch"])
 
 
@@ -145,7 +145,7 @@ class StopIntegrityTests(unittest.TestCase):
     def test_stop_is_the_lowest_low_since_the_sweep_not_just_the_sweep_candle(self):
         # sweep, then a dive far below the sweep low, then two bullish closes
         m15, m5 = _impulse([(100.4, 97.5), (97.5, 98.6), (98.6, 99.6)])
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         lowest = min(c["low"] for c in m5[20:-1])
         if result.candidate:  # if it passes the gates the stop must cover the dive
             self.assertLessEqual(result.candidate.stop_loss, lowest + 1e-9)
@@ -153,7 +153,7 @@ class StopIntegrityTests(unittest.TestCase):
 
     def test_dive_below_sweep_low_cannot_produce_a_huge_fake_rr(self):
         m15, m5 = _impulse([(100.4, 97.5), (97.5, 98.6), (98.6, 99.6)])
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         if result.candidate:
             self.assertLess(result.candidate.risk_reward, 15)
 
@@ -161,6 +161,6 @@ class StopIntegrityTests(unittest.TestCase):
         m15, m5 = _impulse([(100.4, 101.3), (101.3, 102.2)])
         for c in m5[:20]:  # make normal 5M noise much larger than the structural stop distance
             c["high"] += 8.0  # highs only: leaves sweep detection and the stop untouched
-        result = analyze_setup("TEST", m15, m5, with_1m(m5))
+        result = analyze_setup("TEST", m15, m5, with_1m(m5), {"spread": 0.0})
         self.assertNotEqual(result.status, "CANDIDATE")
         self.assertEqual(result.stage, "risk")

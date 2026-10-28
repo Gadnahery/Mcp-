@@ -55,11 +55,11 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 - A sweep alone never produces a candidate.
 
 ### Gate E — Post-sweep reaction and control confirmation
-- Require enough candles before and after the sweep to inspect the reaction.
-- The current code uses a compact/alternating candle-cluster heuristic as a proxy for indecision/base. This is provisional.
-- After the reaction range is defined, require a later completed 5M close beyond that range in the proposed trade direction.
-- A zone touch, wick, or sweep without the later close is not confirmation.
-- The 5M confirmation candle establishes control but is not the entry. After it closes, require two consecutive 1M directional body closes with close-to-close progress; a third matching close strengthens the signal. Entry and R:R are calculated from the final 1M confirmation close. Stale 1M confirmations are rejected. Pullback entry remains unimplemented.
+- Require enough completed 5M candles after the sweep to assess the response.
+- A sweep alone, a zone touch, or a wick is not an entry.
+- Current confirmation requires two consecutive completed 5M candles with directional bodies and close-to-close progress in the proposed trade direction. A third matching close strengthens confirmation but is optional.
+- The current 1M execution layer is disabled. Entry and R:R use the final 5M confirmation close.
+- Confirmations older than the latest two completed 5M candles are rejected as stale. Pullback entry is disabled by default.
 
 ### Gate F — Invalidation, target and reward-to-risk
 - BUY stop: lowest low from the sweep through confirmation.

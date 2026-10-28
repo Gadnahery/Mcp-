@@ -269,10 +269,12 @@ def analyze_setup(
     candles_1m: list[dict[str, Any]] | None = None,
     opts: dict[str, Any] | None = None,
 ) -> Analysis:
-    """Evaluate the setup using 15M context, 5M structure, optional 1M for tighter entries.
+    """Evaluate 15M context -> 5M sweep/control -> 1M execution confirmation.
 
-    1M is further analysis only after 5M confirmation: check that the confirmation leg is clean/concise on a finer timeframe.
-    One-way market entry at the confirming close only — no limit, no retest wait, no pullback.
+    A 5M confirmation is not itself the entry. After that 5M candle closes,
+    1M must confirm the same direction with two consecutive directional bodies
+    and close-to-close progress. A third matching close strengthens the signal.
+    Entry and R:R are calculated from the final 1M confirmation close.
 
     ``opts``: target_mode, pullback, min_rr, spread.
     """
@@ -280,9 +282,10 @@ def analyze_setup(
     target_mode = str(opts.get("target_mode", TARGET_MODE))
     pullback_on = bool(opts.get("pullback", PULLBACK_ENABLED))
     min_rr = float(opts.get("min_rr", MIN_RR))
-    raw = {"15M": candles_15m, "5M": candles_5m}
-    if candles_1m:
-        raw["1M"] = candles_1m
+    # 1M is part of the strategy, not an optional filter. Fail closed if missing.
+    if not candles_1m:
+        return Analysis(symbol, "NO_TRADE", None, "data_quality", (), ("1M execution candles are required; refusing to fall back to a 5M entry",))
+    raw = {"15M": candles_15m, "5M": candles_5m, "1M": candles_1m}
     data = {tf: _completed(cs) for tf, cs in raw.items()}
     evidence: list[str] = []
     missing: list[str] = []
@@ -400,37 +403,36 @@ def analyze_setup(
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate confirmation candle in ordered data",))
     if confirm_index < len(m5) - CONFIRM_MAX_AGE:
         return Analysis(symbol, "NO_TRADE", side, "stale_confirmation", tuple(evidence), (f"Confirmation is older than {CONFIRM_MAX_AGE} completed 5M candles; entry would be stale",))
-    # Entry is at the confirming close in this first implementation. Pullback entry
-    # is deliberately not fabricated: the notes say timing is context-dependent and
-    # the exact pullback decision rules are still open.
-    entry = float(confirm["close"])
-    # 1M further analysis (not an entry style): is the confirmation leg clean on a finer timeframe?
-    if m1:
-        confirm_epoch = int(confirm["epoch"])
-        # 1M candles covering the confirming 5M bar + a few after
-        leg = [c for c in m1 if confirm_epoch - 60 <= int(c["epoch"]) <= confirm_epoch + 5 * 60]
-        if len(leg) >= 5:
-            m1_dom = _dominance(leg, min(3, len(leg) - 1))
-            if m1_dom:
-                evidence.append(f"1M further analysis: close-to-close dominance on confirmation leg = {m1_dom}")
-            else:
-                evidence.append("1M further analysis: confirmation leg dominance mixed/unclear on finer timeframe")
-            # Concise structure check: opposing dominance on 1M after a 5M confirm weakens the one-way idea
-            if side == "BUY" and m1_dom == "bearish":
-                return Analysis(
-                    symbol, "NO_TRADE", side, "m1_conflict", tuple(evidence),
-                    ("1M further analysis: confirmation leg shows opposing bearish dominance; setup not concise enough",),
-                )
-            if side == "SELL" and m1_dom == "bullish":
-                return Analysis(
-                    symbol, "NO_TRADE", side, "m1_conflict", tuple(evidence),
-                    ("1M further analysis: confirmation leg shows opposing bullish dominance; setup not concise enough",),
-                )
-            # Range context for R:R realism notes only (does not change one-way entry)
-            m1_ranges = [float(c["high"]) - float(c["low"]) for c in leg]
-            if m1_ranges:
-                from statistics import median as _med
-                evidence.append(f"1M further analysis: median range on confirmation leg {_med(m1_ranges):.5f} (context only)")
+    # The 5M confirmation candle must be fully closed before 1M execution begins.
+    # Candle epochs are open times, so only 1M candles at/after confirm_epoch + 300
+    # can confirm the entry. Do not use candles that preceded the 5M close.
+    confirm_5m_close_epoch = int(confirm["epoch"]) + 5 * 60
+    execution_leg = [c for c in m1 if int(c["epoch"]) >= confirm_5m_close_epoch]
+    m1_confirm: dict[str, Any] | None = None
+    m1_count = 0
+    m1_confirm_index: int | None = None
+    for j in range(1, len(execution_leg)):
+        prev, current = execution_leg[j - 1], execution_leg[j]
+        po, pc = float(prev["open"]), float(prev["close"])
+        co, cc = float(current["open"]), float(current["close"])
+        valid = (pc < po and cc < co and cc < pc) if side == "SELL" else (pc > po and cc > co and cc > pc)
+        if not valid:
+            continue
+        m1_confirm, m1_count, m1_confirm_index = current, 2, j
+        if j + 1 < len(execution_leg):
+            third = execution_leg[j + 1]
+            to, tc = float(third["open"]), float(third["close"])
+            if (side == "SELL" and tc < to and tc < cc) or (side == "BUY" and tc > to and tc > cc):
+                m1_confirm, m1_count, m1_confirm_index = third, 3, j + 1
+        break
+    if m1_confirm is None or m1_confirm_index is None:
+        return Analysis(symbol, "NO_TRADE", side, "m1_confirmation", tuple(evidence), ("5M control was confirmed, but no later 1M sequence of two consecutive directional body closes with close-to-close progress was found; no entry",), None, {"confirm_epoch": int(confirm["epoch"]), "five_minute_close_epoch": confirm_5m_close_epoch})
+    # A historical 1M confirmation is not a fresh live entry. Keep the candidate
+    # only if its signal candle is among the latest three completed 1M candles.
+    if m1_confirm_index < len(execution_leg) - 3:
+        return Analysis(symbol, "NO_TRADE", side, "m1_stale_confirmation", tuple(evidence), ("The 1M confirmation is older than the latest three completed 1M candles; do not enter late",), None, {"confirm_epoch": int(confirm["epoch"]), "m1_confirm_epoch": int(m1_confirm["epoch"])})
+    entry = float(m1_confirm["close"])
+    evidence.append(f"1M execution confirmed by {m1_count} consecutive {'bearish' if side == 'SELL' else 'bullish'} body closes with directional close-to-close progress; entry at 1M close {entry:.5f}")
     spread = float(opts.get("spread", ASSUMED_SPREADS.get(symbol, 0.0)))
     pool = areas_high if side == "BUY" else areas_low
     if target_mode != "nearest":
@@ -489,7 +491,7 @@ def analyze_setup(
         stop_loss=stop,
         take_profit=target,
         risk_reward=rr,
-        candle_epoch=int(confirm["epoch"]),
+        candle_epoch=int(m1_confirm["epoch"]),
         explanation=" ".join(evidence) + " Research candidate only; the automated swing/zone and base detectors are provisional.",
         invalidation=invalidation,
         evidence=tuple(evidence),

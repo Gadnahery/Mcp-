@@ -129,6 +129,47 @@ def _dominance(candles: list[dict[str, Any]], n: int = 3) -> str | None:
     return None
 
 
+def _strong_counter_bias_confirmation(
+    side: Side,
+    sweep: dict[str, Any],
+    candles: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """Require three strong directional closes and a break beyond the sweep candle.
+
+    This stricter gate is only used when a setup opposes clear 15M dominance.
+    Thresholds are provisional research settings, not validated performance claims.
+    """
+    if len(candles) < 3:
+        return False, "Counter-bias setup requires three completed confirmation candles"
+    streak = candles[-3:]
+    closes = [float(c["close"]) for c in streak]
+    for i, candle in enumerate(streak):
+        o, h, low, close = (float(candle[k]) for k in ("open", "high", "low", "close"))
+        candle_range = h - low
+        body_ratio = abs(close - o) / candle_range if candle_range > 0 else 0.0
+        directional = close < o if side == "SELL" else close > o
+        if not directional:
+            return False, "Counter-bias confirmation contains a candle without a directional body"
+        if body_ratio < DOMINANCE_MIN_BODY:
+            return False, "Counter-bias confirmation contains a doji-like weak body"
+        if i > 0 and not (closes[i] < closes[i - 1] if side == "SELL" else closes[i] > closes[i - 1]):
+            return False, "Counter-bias confirmation lacks consecutive close-to-close progress"
+    mean_body_ratio = sum(
+        abs(float(c["close"]) - float(c["open"])) /
+        max(float(c["high"]) - float(c["low"]), 1e-12)
+        for c in streak
+    ) / 3
+    if mean_body_ratio < DOMINANCE_MIN_MEAN_BODY:
+        return False, "Counter-bias confirmation bodies are not strong enough on average"
+    sweep_boundary = float(sweep["low"]) if side == "SELL" else float(sweep["high"])
+    final_close = closes[-1]
+    breaks_sweep = final_close < sweep_boundary if side == "SELL" else final_close > sweep_boundary
+    if not breaks_sweep:
+        boundary_name = "sweep-candle low" if side == "SELL" else "sweep-candle high"
+        return False, f"Counter-bias confirmation has not closed beyond the {boundary_name}"
+    return True, "Three strong directional closes and a close beyond the sweep-candle boundary"
+
+
 def _swing_levels(candles: list[dict[str, Any]], wing: int = 2) -> tuple[list[float], list[float]]:
     """Return confirmed local swing highs/lows. Wing=2 is a provisional coding proxy."""
     highs: list[float] = []
@@ -423,6 +464,28 @@ def analyze_setup(
         return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))
     path = "dominance_closes"
     reaction_high = reaction_low = None
+    counter_bias = bool(
+        m15_dom and
+        ((m15_dom == "bullish" and side == "SELL") or
+         (m15_dom == "bearish" and side == "BUY"))
+    )
+    if counter_bias:
+        confirm_index_for_gate = next(
+            (i for i, candle in enumerate(m5) if int(candle["epoch"]) == int(confirm["epoch"])),
+            None,
+        )
+        if confirm_index_for_gate is None:
+            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), (
+                "Could not locate counter-bias confirmation candles in ordered data",
+            ))
+        confirmation_streak = m5[max(sweep_index + 1, confirm_index_for_gate - 2):confirm_index_for_gate + 1]
+        strong_ok, strong_reason = _strong_counter_bias_confirmation(side, sweep, confirmation_streak)
+        if count < 3 or not strong_ok:
+            evidence.append("Counter-bias SELL/BUY requires stricter confirmation because 15M dominance points the other way")
+            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), (
+                f"Counter-bias confirmation rejected: {strong_reason if not strong_ok else 'only two consecutive directional closes; three are required'}",
+            ))
+        evidence.append(f"Counter-bias gate passed: {strong_reason}")
     evidence.append(f"{count} consecutive {'bearish' if side == 'SELL' else 'bullish'} body closes with directional close-to-close progress confirmed control; final close {float(confirm['close']):.5f}")
     confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
     if confirm_index is None:

@@ -424,7 +424,7 @@ def analyze_setup(
             to, tc = float(third["open"]), float(third["close"])
             if (side == "SELL" and tc < to and tc < cc) or (side == "BUY" and tc > to and tc > cc):
                 m1_confirm, m1_count, m1_confirm_index = third, 3, j + 1
-        break
+        # Continue scanning so the freshest valid sequence wins, not an older one.
     if m1_confirm is None or m1_confirm_index is None:
         return Analysis(symbol, "NO_TRADE", side, "m1_confirmation", tuple(evidence), ("5M control was confirmed, but no later 1M sequence of two consecutive directional body closes with close-to-close progress was found; no entry",), None, {"confirm_epoch": int(confirm["epoch"]), "five_minute_close_epoch": confirm_5m_close_epoch})
     # A historical 1M confirmation is not a fresh live entry. Keep the candidate

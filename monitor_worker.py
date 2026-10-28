@@ -143,12 +143,8 @@ async def run() -> None:
                 data = {}
                 for timeframe in ("15m", "5m"):
                     data[timeframe] = await api.candles(symbol, timeframe, settings.candle_count)
-                # 1M: more bars for micro retest / tighter limit entry (R:R recovery)
                 try:
-                    data["1m"] = await api.candles(symbol, "1m", min(300, max(120, settings.candle_count * 2)))
                 except Exception:
-                    data["1m"] = []
-                    logger.warning("%s: 1m candles unavailable; continuing with 15m/5m only", symbol)
                 # Candle timestamps are candle-open epochs. Require a recent completed
                 # candle on every timeframe; stale/closed-market data must never alert.
                 now = int(time.time())
@@ -171,7 +167,7 @@ async def run() -> None:
                 # Score any open alerts for this symbol against the latest real candles
                 if await ledger.update(symbol, data.get("1m") or data["5m"]):
                     STATUS["ledger"] = ledger.summary()
-                analysis = analyze_setup(symbol, data["15m"], data["5m"], data.get("1m") or None, None)
+                analysis = analyze_setup(symbol, data["15m"], data["5m"])
                 record_analysis(symbol, analysis)
                 candidate = analysis.candidate
                 if candidate is not None and await ledger.record(candidate):

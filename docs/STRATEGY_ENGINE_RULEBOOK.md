@@ -306,7 +306,7 @@ The following implementation gaps identified in the research review have now bee
 - **Honest target evidence:** the alert reports the actual selected 5M or 15M target timeframe.
 - **Replay execution model:** when 1M history is available, replay resolves stop/target using 1M bars after the signal candle closes, estimates fill from the first subsequent 1M open, treats a gap beyond the target as missed rather than a win, uses the actual estimated fill for target R, and treats same-candle stop/target as a stop. It falls back to 5M resolution only when 1M data is unavailable and reports that limitation.
 - **History downloader:** scripts/fetch_history.py now downloads 1M as well as 5M and 15M history, and replay.py passes 1M history to the replay engine.
-- **Shadow ledger timing:** alerts are evaluated starting at the close of the 5M confirmation candle (candle_epoch + 300), not one minute after its opening timestamp. Open alerts are scored against deeper 1M history; the default fetch is 1,440 bars and can be changed with LEDGER_CANDLE_COUNT.
+- **Shadow ledger timing:** the ledger records the signal close (candle_epoch + 300) separately from the first eligible full minute after the alert was recorded. It checks intervening 1M bars before fill: a target already reached is marked missed, and a stop/invalidation reached first cancels the unfilled idea. Open alerts are scored against deeper 1M history; the default fetch is 1,440 bars and can be changed with LEDGER_CANDLE_COUNT.
 - **Scorecard:** the ledger now reports closed sample count, expectancy in R per closed trade, maximum drawdown in R, maximum consecutive losses, and missed gap entries in addition to win rate and net R.
 
 ### Still not completed / not proven
@@ -320,4 +320,4 @@ The following implementation gaps identified in the research review have now bee
 
 ## Fresh-entry timing safeguard — 2026-10-28
 
-The live engine now rejects a confirmation unless it belongs to the latest completed 5M candle. This avoids presenting a historical confirming close as a fresh entry when price has already moved since that close. Replay still evaluates each bar chronologically; shadow outcome scoring starts at the first subsequent 1M candle open when available.
+The live engine now rejects a confirmation unless it belongs to the latest completed 5M candle. The shadow ledger separates the signal close from the next full minute after the alert, checks intervening bars for target/stop touches before fill, and uses the first eligible 1M open to estimate fill. Replay evaluates each bar chronologically and uses the first post-signal 1M open where available.

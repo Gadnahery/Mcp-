@@ -576,6 +576,7 @@ def detect_candidate(
     symbol: str,
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
+    candles_1m: list[dict[str, Any]] | None = None,
 ) -> Candidate | None:
-    """Run the 15M/5M strategy; 1H and 1M are not required."""
-    return analyze_setup(symbol, candles_15m, candles_5m).candidate
+    """Run the 15M context, 5M control, 1M execution strategy."""
+    return analyze_setup(symbol, candles_15m, candles_5m, candles_1m).candidate

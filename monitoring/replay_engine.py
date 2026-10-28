@@ -51,7 +51,7 @@ def _simulate(c: Any, future: list[dict[str, Any]], max_wait: int = 12) -> tuple
             if (buy and fill_price >= c.take_profit) or (not buy and fill_price <= c.take_profit):
                 return "missed (gap beyond target)", None
             if (buy and fill_price <= c.stop_loss) or (not buy and fill_price >= c.stop_loss):
-                return "stop (gap at entry)", -1.0
+                return "cancelled (gap beyond stop)", None
             risk = abs(fill_price - c.stop_loss) + spread
 
         hit_stop = f["low"] <= c.stop_loss if buy else f["high"] >= c.stop_loss

@@ -33,12 +33,12 @@ CONFIRM_MAX_AGE = 2
 # Dominance path (notes v1.3: "two or three consecutive closes in the same direction with
 # strong bodies"): after the sweep, N consecutive closes in the trade direction, healthy bodies,
 # finishing beyond the sweep candle's extreme. Provisional thresholds.
-# Reaction-area ranking: a 15M swing counts as a *significant* reaction area when price
-# reacted away from it by >= SIG_REACTION_MULT x median 15M range within the next
-# SIG_REACTION_LOOKAHEAD candles, or when it was touched at least twice (equal highs/lows).
+# Reaction-area ranking: a swing counts as significant when price reacts away from it
+# by >= SIG_REACTION_MULT x the supplied timeframe-specific median range within the next
+# SIG_REACTION_LOOKAHEAD candles, or when it is touched at least twice (equal highs/lows).
 SIG_REACTION_MULT = 1.0
 SIG_REACTION_LOOKAHEAD = 4
-# "significant" (default) targets the nearest significant area; "nearest" uses any 15M swing.
+# "significant" (default) targets the nearest significant 5M/15M area; "nearest" uses any detected swing.
 TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
@@ -513,7 +513,7 @@ def analyze_setup(
         evidence=tuple(evidence),
         entry_style=style,
         sweep_epoch=int(sweep["epoch"]),
-        target_reference=("nearest significant 15M reaction area in trade direction" if target_mode != "nearest" else "nearest detected 15M swing in trade direction"),
+        target_reference=("nearest significant 5M/15M reaction area in trade direction" if target_mode != "nearest" else "nearest detected 5M/15M swing in trade direction"),
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)
 

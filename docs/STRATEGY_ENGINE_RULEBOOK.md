@@ -53,6 +53,7 @@ The 1H timeframe is intentionally not used in the current replay configuration. 
 - BUY candidate context: price trades below a detected 15M swing low and the same 5M candle closes back above that reference.
 - SELL candidate context: price trades above a detected 15M swing high and the same 5M candle closes back below that reference.
 - The current detector searches only a recent subset of the 5M candles for a qualifying sweep.
+- The engine records the sweep candle's rejection-wick ratio and close location. It also describes a compact, overlapping pre-sweep cluster when detected. These are OHLC-based clues consistent with rejection/stalling, not proof of absorption.
 - A sweep alone never produces a candidate.
 
 ### Gate E — Post-sweep reaction and control confirmation
@@ -326,3 +327,8 @@ The live engine now rejects a confirmation unless it belongs to the latest compl
 ## Candle confirmation quality — 2026-10-28
 
 Normal confirmation now checks not just candle direction and close-to-close progress, but also body/range and closing location: each candle must have a body at least 20% of its range, close in the directional outer 35% of the range, and the sequence mean body/range must be at least 0.40. A qualifying third candle may strengthen/extend the sequence; if it is weak, a valid two-candle sequence can still be used. Counter-bias trades retain the stricter three-candle, 0.45 mean-body threshold. These are experimental measurements of price progress, not direct proof of order flow or absorption.
+
+
+## Rejection and possible absorption evidence — 2026-10-28
+
+The alert now reports the sweep candle's rejection-wick size relative to its range and where it closed within that range. It can also report a compact/overlapping pre-sweep cluster as possible stalling. These observations enrich the explanation; they do not independently create a trade or claim to identify actual orders. Only subsequent qualified control confirmation can advance the setup.

@@ -28,8 +28,8 @@ Side = Literal["BUY", "SELL"]
 SWEEP_MAX_DEPTH_MULT = 0.75
 # The sweep candle may sit up to this many completed 5M candles before the latest one.
 SWEEP_LOOKBACK = 10
-# The confirming close must be one of the latest N completed 5M candles (fresh entry only).
-CONFIRM_MAX_AGE = 2
+# A live signal must confirm on the latest completed 5M candle; older closes are stale.
+CONFIRM_MAX_AGE = 1
 # Dominance path (notes v1.3: "two or three consecutive closes in the same direction with
 # strong bodies"): after the sweep, N consecutive closes in the trade direction, healthy bodies,
 # finishing beyond the sweep candle's extreme. Provisional thresholds.

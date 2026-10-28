@@ -2,7 +2,7 @@ name: Strategy monitor tests
 
 on:
   push:
-    branches: [main, feature/strategy-telegram-monitor]
+    branches: [main, feature/strategy-telegram-monitor, validation/replay-2026-10-28]
   pull_request:
     branches: [main]
 
@@ -20,3 +20,5 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run strategy tests
         run: python -m unittest discover -s tests -v
+      - name: Replay recent XAUUSD snapshot (configured spread)
+        run: python scripts/validate_strategy.py data/validation/frxxauusd_2026-10-28.json

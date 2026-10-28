@@ -29,7 +29,7 @@ class Mt5EaSafetyTests(unittest.TestCase):
         self.assertIn("trade.PositionModify(_Symbol,wanted,tp)", EA)
         self.assertIn("trade.PositionClose(_Symbol)", EA)
         self.assertIn("ManageOpenTrade();", EA)
-        self.assertIn("two opposing M1 candles", GUIDE)
+        self.assertIn("2 consecutive completed M1 candles", GUIDE)
 
     def test_risk_guards(self):
         self.assertIn("RiskPercent", EA)

@@ -91,8 +91,18 @@ class SweepAndFreshnessTests(unittest.TestCase):
             extra.append(dict(epoch=m5[-1]["epoch"] + 300 * k, open=o, high=o + 0.4, low=o - 0.1, close=o + 0.2))
         # drop the old forming candle, append completed extras plus a new forming candle
         m5b = m5[:-1] + extra + [dict(extra[-1], epoch=extra[-1]["epoch"] + 300)]
-        result = analyze_setup("TEST", m15, m5b, with_1m(m5b))
+        result = analyze_setup("TEST", m15, m5b, with_1m(m5b), {"spread": 0.0})
         self.assertNotEqual(result.status, "CANDIDATE")
+
+    def test_confirmation_from_previous_completed_candle_is_not_a_fresh_entry(self):
+        m15, m5 = build()
+        last = m5[-2]["close"]
+        neutral = dict(epoch=m5[-1]["epoch"], open=last, high=last + 0.2, low=last - 0.2, close=last)
+        forming = dict(epoch=neutral["epoch"] + 300, open=last, high=last + 0.2, low=last - 0.2, close=last)
+        m5b = m5[:-1] + [neutral, forming]
+        result = analyze_setup("TEST", m15, m5b, with_1m(m5b), {"spread": 0.0})
+        self.assertNotEqual(result.status, "CANDIDATE")
+        self.assertEqual(result.stage, "stale_confirmation")
 
     def test_equal_highs_count_as_one_swing_level(self):
         from monitoring.strategy import _swing_levels

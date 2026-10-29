@@ -27,7 +27,7 @@ Side = Literal["BUY", "SELL"]
 # A sweep may trade beyond a 15M swing level by up to this multiple of the median 15M range.
 SWEEP_MAX_DEPTH_MULT = float(os.getenv('SWEEP_MAX_DEPTH_MULT', '1.0'))
 # The sweep candle may sit up to this many completed 5M candles before the latest one.
-SWEEP_LOOKBACK = int(os.getenv('SWEEP_LOOKBACK', '16'))
+SWEEP_LOOKBACK = int(os.getenv('SWEEP_LOOKBACK', '20'))
 # A live signal must confirm on the latest completed 5M candle; older closes are stale.
 CONFIRM_MAX_AGE = int(os.getenv('CONFIRM_MAX_AGE', '2'))
 # Dominance path (notes v1.3: "two or three consecutive closes in the same direction with
@@ -43,7 +43,9 @@ TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
 PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "false").lower() == "true"
-MIN_RR = float(os.getenv('MIN_RR', '3.0'))
+MIN_RR = float(os.getenv('MIN_RR', '2.5'))
+# Prefer achievable targets: far 1:8+ objectives get stopped out too often in backtests.
+MAX_TARGET_RR = float(os.getenv('MAX_TARGET_RR', '4.0'))
 # A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
 MIN_RISK_MULT = float(os.getenv('MIN_RISK_MULT', '0.35'))
 # Assumed all-in spread in price units, used to shrink reward and widen risk. These are
@@ -64,7 +66,7 @@ def _load_spreads() -> dict[str, float]:
 
 
 ASSUMED_SPREADS: dict[str, float] = _load_spreads()
-DOMINANCE_CLOSES = int(os.getenv('DOMINANCE_CLOSES', '2'))
+DOMINANCE_CLOSES = int(os.getenv('DOMINANCE_CLOSES', '3'))
 DOMINANCE_MIN_MEAN_BODY = float(os.getenv('DOMINANCE_MIN_MEAN_BODY', '0.40'))   # mean body/range of the streak candles
 DOMINANCE_MIN_BODY = float(os.getenv('DOMINANCE_MIN_BODY', '0.15'))        # no single streak candle may be a doji-like sliver
 
@@ -302,13 +304,19 @@ def _select_target_area(
     areas_5m: list[dict[str, Any]],
     areas_15m: list[dict[str, Any]],
     target_mode: str = "significant",
+    stop: float | None = None,
+    spread: float = 0.0,
+    min_rr: float | None = None,
+    max_rr: float | None = None,
 ) -> dict[str, Any] | None:
-    """Choose the nearest eligible reaction/liquidity area beyond entry.
+    """Choose a reaction/liquidity target with achievable planned R:R.
 
-    The 5M areas give the strategy a nearby intraday target option; 15M areas
-    retain the broader structure context. In significant mode, a level must
-    show a meaningful reaction or repeated touches on its own timeframe.
+    Redesign: prefer levels that clear min R:R but are not ultra-far (high RR
+    targets were frequently stopped out before being hit in gold backtests).
+    Prefer 5M structure when R:R is similar (more realistic intraday targets).
     """
+    min_rr = float(MIN_RR if min_rr is None else min_rr)
+    max_rr = float(MAX_TARGET_RR if max_rr is None else max_rr)
     candidates: list[dict[str, Any]] = []
     for timeframe, areas in (("5M", areas_5m), ("15M", areas_15m)):
         for area in areas:
@@ -320,11 +328,38 @@ def _select_target_area(
                 continue
             candidate = dict(area)
             candidate["timeframe"] = timeframe
+            if stop is not None:
+                risk = abs(entry - stop) + spread
+                reward = ((level - entry) if side == "BUY" else (entry - level)) - spread
+                rr = reward / risk if risk > 0 and reward > 0 else 0.0
+                candidate["planned_rr"] = rr
+            else:
+                candidate["planned_rr"] = None
             candidates.append(candidate)
     if not candidates:
         return None
-    # Nearest valid target first; at equal prices prefer the higher-timeframe level.
-    return min(candidates, key=lambda a: (abs(float(a["level"]) - entry), 0 if a["timeframe"] == "15M" else 1))
+
+    def score(a: dict[str, Any]) -> tuple:
+        rr = a.get("planned_rr")
+        dist = abs(float(a["level"]) - entry)
+        tf_penalty = 0 if a["timeframe"] == "5M" else 1
+        if rr is None:
+            return (1, dist, tf_penalty)
+        # Prefer RR inside [min_rr, max_rr]; then closer; then 5M
+        if min_rr <= rr <= max_rr:
+            band = 0
+        elif rr > max_rr:
+            band = 1  # too ambitious — still usable but deprioritized
+        else:
+            band = 2  # below min RR
+        # Within band, prefer RR closer to ~3 (sweet spot)
+        ideal = abs((rr if rr else 0) - 3.0)
+        return (band, ideal, dist, tf_penalty)
+
+    candidates.sort(key=score)
+    best = candidates[0]
+    # If best is below min RR, still return it (caller may reject) so diagnostics work
+    return best
 
 
 def _plan_entry(side: str, market_entry: float, stop: float, target: float, retest: float | None,
@@ -573,11 +608,13 @@ def analyze_setup(
             if triple_ok:
                 confirm, count = third, 3
                 break
-        if pair_ok:
+        # Quality redesign: only accept 2-close confirm when DOMINANCE_CLOSES <= 2
+        if pair_ok and DOMINANCE_CLOSES <= 2:
             confirm, count = current, 2
             break
     if confirm is None:
-        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("No two consecutive directional body closes with close-to-close progress after the sweep",))
+        need = max(2, DOMINANCE_CLOSES)
+        return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), (f"No {need} consecutive directional body closes with close-to-close progress after the sweep",))
     path = "dominance_closes"
     reaction_high = reaction_low = None
     counter_bias = bool(
@@ -648,6 +685,9 @@ def analyze_setup(
         areas_5m_high if side == "BUY" else areas_5m_low,
         areas_high if side == "BUY" else areas_low,
         target_mode,
+        stop=stop,
+        spread=spread,
+        min_rr=min_rr,
     )
     risk = (entry - stop) if side == "BUY" else (stop - entry)
     if risk <= 0:

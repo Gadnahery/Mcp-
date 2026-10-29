@@ -25,11 +25,11 @@ Side = Literal["BUY", "SELL"]
 
 # Provisional, user-approved-for-testing thresholds (review after replay/paper results).
 # A sweep may trade beyond a 15M swing level by up to this multiple of the median 15M range.
-SWEEP_MAX_DEPTH_MULT = 0.75
+SWEEP_MAX_DEPTH_MULT = float(os.getenv('SWEEP_MAX_DEPTH_MULT', '1.0'))
 # The sweep candle may sit up to this many completed 5M candles before the latest one.
-SWEEP_LOOKBACK = 10
+SWEEP_LOOKBACK = int(os.getenv('SWEEP_LOOKBACK', '16'))
 # A live signal must confirm on the latest completed 5M candle; older closes are stale.
-CONFIRM_MAX_AGE = 1
+CONFIRM_MAX_AGE = int(os.getenv('CONFIRM_MAX_AGE', '2'))
 # Dominance path (notes v1.3: "two or three consecutive closes in the same direction with
 # strong bodies"): after the sweep, N consecutive closes in the trade direction, healthy bodies,
 # finishing beyond the sweep candle's extreme. Provisional thresholds.
@@ -43,9 +43,9 @@ TARGET_MODE = os.getenv("TARGET_MODE", "significant").lower()
 # Retest (pullback) entries: if entering at the confirming close fails 1:3, a limit order at the
 # retest of the broken level may still qualify. Fill is NOT guaranteed; measure fill rates in replay.
 PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "false").lower() == "true"
-MIN_RR = 3.0
+MIN_RR = float(os.getenv('MIN_RR', '3.0'))
 # A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
-MIN_RISK_MULT = 0.5
+MIN_RISK_MULT = float(os.getenv('MIN_RISK_MULT', '0.35'))
 # Assumed all-in spread in price units, used to shrink reward and widen risk. These are
 # starting estimates, not measured Deriv values: override with ASSUMED_SPREADS="frxEURUSD=0.00012,...".
 _DEFAULT_SPREADS = {"frxEURUSD": 0.00012, "frxGBPUSD": 0.00015, "frxXAUUSD": 0.35, "cryBTCUSD": 15.0}
@@ -64,9 +64,9 @@ def _load_spreads() -> dict[str, float]:
 
 
 ASSUMED_SPREADS: dict[str, float] = _load_spreads()
-DOMINANCE_CLOSES = 3
-DOMINANCE_MIN_MEAN_BODY = 0.45   # mean body/range of the streak candles
-DOMINANCE_MIN_BODY = 0.20        # no single streak candle may be a doji-like sliver
+DOMINANCE_CLOSES = int(os.getenv('DOMINANCE_CLOSES', '2'))
+DOMINANCE_MIN_MEAN_BODY = float(os.getenv('DOMINANCE_MIN_MEAN_BODY', '0.40'))   # mean body/range of the streak candles
+DOMINANCE_MIN_BODY = float(os.getenv('DOMINANCE_MIN_BODY', '0.15'))        # no single streak candle may be a doji-like sliver
 
 
 @dataclass(frozen=True)
@@ -585,22 +585,20 @@ def analyze_setup(
         ((context_bias == "bullish" and side == "SELL") or
          (context_bias == "bearish" and side == "BUY"))
     )
-    if counter_bias:
-        confirm_index_for_gate = next(
-            (i for i, candle in enumerate(m5) if int(candle["epoch"]) == int(confirm["epoch"])),
-            None,
-        )
+    if counter_bias and os.getenv('ALIGNED_ONLY', 'true').lower() == 'true':
+        evidence.append("15M dominance conflicts with trade direction; skipping counter-bias setup for quality")
+        return Analysis(symbol, "NO_TRADE", side, "htf_alignment", tuple(evidence), (
+            "Setup opposes 15M close-to-close dominance; aligned setups only",
+        ))
+    elif counter_bias:
+        evidence.append("Counter-bias allowed (ALIGNED_ONLY=false); requiring stronger confirmation")
+        confirm_index_for_gate = next((i for i, candle in enumerate(m5) if int(candle["epoch"]) == int(confirm["epoch"])), None)
         if confirm_index_for_gate is None:
-            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), (
-                "Could not locate counter-bias confirmation candles in ordered data",
-            ))
+            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), ("Could not locate counter-bias confirmation",))
         confirmation_streak = m5[max(sweep_index + 1, confirm_index_for_gate - 2):confirm_index_for_gate + 1]
         strong_ok, strong_reason = _strong_counter_bias_confirmation(side, sweep, confirmation_streak)
-        if count < 3 or not strong_ok:
-            evidence.append("Counter-bias SELL/BUY requires stricter confirmation because 15M dominance points the other way")
-            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), (
-                f"Counter-bias confirmation rejected: {strong_reason if not strong_ok else 'only two consecutive directional closes; three are required'}",
-            ))
+        if count < max(2, DOMINANCE_CLOSES) or not strong_ok:
+            return Analysis(symbol, "NO_TRADE", side, "control_confirmation", tuple(evidence), (f"Counter-bias rejected: {strong_reason}",))
         evidence.append(f"Counter-bias gate passed: {strong_reason}")
     evidence.append(f"{count} consecutive {'bearish' if side == 'SELL' else 'bullish'} body closes with directional close-to-close progress confirmed control; final close {float(confirm['close']):.5f}")
     confirm_index = next((i for i, c in enumerate(m5) if int(c["epoch"]) == int(confirm["epoch"])), None)
@@ -661,23 +659,47 @@ def analyze_setup(
         kind = "significant 5M/15M reaction area" if target_mode != "nearest" else "5M/15M reaction reference"
         return Analysis(symbol, "NO_TRADE", side, "target", tuple(evidence), tuple(missing + [f"No {kind} ahead in the trade direction"]), None, {"confirm_epoch": int(confirm["epoch"]), "no_target": True})
     target = float(target_area["level"])
-    plan = _plan_entry(side, entry, stop, target, retest, retest_filled, spread, min_rr, False)  # one-way only: no limit/retest wait
+    plan = _plan_entry(side, entry, stop, target, retest, retest_filled, spread, min_rr, False)  # one-way only
+    if plan["style"] is None and target_mode != "nearest":
+        # Fallback: nearest swing target if significant area fails min R:R (still one-way market entry)
+        near_pool = areas_high if side == "BUY" else areas_low
+        if side == "BUY":
+            near_ahead = [a for a in near_pool if a["level"] > entry]
+            near_area = min(near_ahead, key=lambda a: a["level"]) if near_ahead else None
+        else:
+            near_ahead = [a for a in near_pool if a["level"] < entry]
+            near_area = max(near_ahead, key=lambda a: a["level"]) if near_ahead else None
+        if near_area is not None:
+            near_target = float(near_area["level"])
+            near_plan = _plan_entry(side, entry, stop, near_target, retest, retest_filled, spread, min_rr, False)
+            if near_plan["style"] is not None:
+                evidence.append(
+                    f"Significant target failed min R:R; using nearest swing target {near_target:.5f} at 1:{near_plan['rr']:.2f}"
+                )
+                target = near_target
+                target_area = dict(near_area)
+                target_area.setdefault('timeframe', '15M')
+                target_area.setdefault('touches', near_area.get('touches', 1))
+                target_area.setdefault('reaction', near_area.get('reaction', 0.0))
+                plan = near_plan
+                target_mode = 'nearest'
     if plan["style"] is None:
         msg = f"Next reaction area offers only 1:{plan['rr_market']:.2f} at the confirming close (net of assumed spread {spread:g}); minimum is 1:{min_rr:g}"
         if plan["rr_pullback"] is not None:
             msg += f"; a retest entry would offer 1:{plan['rr_pullback']:.2f}"
-        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "side": side, "entry": entry, "stop": stop, "target": target, "sweep_epoch": int(sweep["epoch"]), "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"], "spread": spread})
+        return Analysis(symbol, "NO_TRADE", side, "risk_reward", tuple(evidence), tuple(missing + [msg]), None, {"confirm_epoch": int(confirm["epoch"]), "rr_market": plan["rr_market"], "rr_pullback": plan["rr_pullback"], "risk": risk, "side": side, "entry": entry, "stop": stop, "target": target, "sweep_epoch": int(sweep["epoch"]), "reward_to_target": abs(target - entry), "target_touches": target_area["touches"], "target_reaction": target_area["reaction"],
+ "spread": spread})
     style = ("pullback_limit" if plan["style"] == "pullback_limit"
              else ("dominance_closes" if path == "dominance_closes" else "decisive_close"))
     final_entry = float(plan["entry"])
     rr = float(plan["rr"])
     area_note = (
-        f"{target_area['timeframe']} area, touched {target_area['touches']}x, "
+        f"{target_area.get('timeframe', '15M')} area, touched {target_area['touches']}x, "
         f"reaction {target_area['reaction']:.5f}"
         if target_mode != "nearest"
-        else f"nearest {target_area['timeframe']} swing/liquidity reference"
+        else f"nearest {target_area.get('timeframe', '15M')} swing/liquidity reference"
     )
-    evidence.append(f"Structural stop at {stop:.5f}; target = {'significant ' if target_mode != 'nearest' else ''}{target_area['timeframe']} reaction/liquidity area at {target:.5f} ({area_note}); planned R:R 1:{rr:.2f} net of assumed spread {spread:g}")
+    evidence.append(f"Structural stop at {stop:.5f}; target = {'significant ' if target_mode != 'nearest' else ''}{target_area.get('timeframe', '15M')} reaction/liquidity area at {target:.5f} ({area_note}); planned R:R 1:{rr:.2f} net of assumed spread {spread:g}")
     if style == "pullback_limit":
         evidence.append(f"Market entry at {entry:.5f} only offers 1:{plan['rr_market']:.2f}; LIMIT idea at the retest of the broken level {final_entry:.5f} (may never fill)")
         invalidation = (f"Limit idea only. Cancel if price trades {'below' if side == 'BUY' else 'above'} {stop:.5f} before filling, "
@@ -700,7 +722,7 @@ def analyze_setup(
         evidence=tuple(evidence),
         entry_style=style,
         sweep_epoch=int(sweep["epoch"]),
-        target_reference=(f"nearest {'significant ' if target_mode != 'nearest' else ''}{target_area['timeframe']} reaction/liquidity area in trade direction"),
+        target_reference=(f"nearest {'significant ' if target_mode != 'nearest' else ''}{target_area.get('timeframe', '15M')} reaction/liquidity area in trade direction"),
         assumed_spread=spread,
     )
     return Analysis(symbol, "CANDIDATE", side, "risk_approved_candidate", tuple(evidence), tuple(missing), candidate)

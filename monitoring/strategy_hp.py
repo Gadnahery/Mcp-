@@ -27,7 +27,7 @@ from .strategy import (
     _swing_levels,
 )
 
-HP_TARGET_RR = float(os.getenv("HP_TARGET_RR", "0.8"))
+HP_TARGET_RR = float(os.getenv("HP_TARGET_RR", "0.7"))
 HP_MIN_BODY = float(os.getenv("HP_MIN_BODY", "0.45"))
 HP_CLOSE_EDGE = float(os.getenv("HP_CLOSE_EDGE", "0.70"))
 HP_CONFIRM_N = int(os.getenv("HP_CONFIRM_N", "2"))
@@ -132,8 +132,9 @@ def analyze_setup_hp(
     evidence.append(f"{confirm_n} strong directional confirms with close location + progress")
 
     confirm_index = next(i for i, c in enumerate(m5) if int(c["epoch"]) == int(final["epoch"]))
-    if confirm_index < len(m5) - 2:
-        return Analysis(symbol, "NO_TRADE", side, "stale_confirmation", tuple(evidence), ("Confirmation not on the latest completed 5M bar",))
+    # Allow confirm within last 2 completed bars (research window)
+    if confirm_index < len(m5) - 3:
+        return Analysis(symbol, "NO_TRADE", side, "stale_confirmation", tuple(evidence), ("Confirmation too old",))
 
     entry = float(final["close"])
     if side == "BUY":

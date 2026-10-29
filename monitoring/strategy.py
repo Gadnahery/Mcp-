@@ -46,6 +46,7 @@ PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "false").lower() == "true"
 MIN_RR = float(os.getenv('MIN_RR', '2.5'))
 # Prefer achievable targets: far 1:8+ objectives get stopped out too often in backtests.
 MAX_TARGET_RR = float(os.getenv('MAX_TARGET_RR', '4.0'))
+HP_MODE = os.getenv('HP_MODE', 'true').lower() == 'true'
 # A stop closer than this multiple of the median 5M range is inside normal noise: reject (R:R would be meaningless).
 MIN_RISK_MULT = float(os.getenv('MIN_RISK_MULT', '0.35'))
 # Assumed all-in spread in price units, used to shrink reward and widen risk. These are
@@ -466,6 +467,9 @@ def analyze_setup(
     ``opts``: target_mode, pullback, min_rr, spread.
     """
     opts = opts or {}
+    if opts.get("hp_mode", HP_MODE):
+        from .strategy_hp import analyze_setup_hp
+        return analyze_setup_hp(symbol, candles_15m, candles_5m, opts)
     target_mode = str(opts.get("target_mode", TARGET_MODE))
     pullback_on = bool(opts.get("pullback", PULLBACK_ENABLED))
     min_rr = float(opts.get("min_rr", MIN_RR))
